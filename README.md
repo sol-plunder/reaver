@@ -1,8 +1,12 @@
 # Reaver Scheme
 
 This contains an implementation of Reaver, a scheme-like language for
-the PLAN ISA, and also a simple reference implementation of PLAN and
-Wisp which is sufficient for testing Reaver, but which is not going to
+the PLAN ISA.  Because Reaver is implemented directly in
+PLAN, any implementation of PLAN should be able to run
+this code.
+
+A simple reference implementation of PLAN and
+Wisp is also included, which is sufficient for testing Reaver, but which is not going to
 have the performance or scalability needed for real applications.
 
 Reaver is implemented in Wisp, which is a simple s-expression syntax
