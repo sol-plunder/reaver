@@ -21,3 +21,10 @@ pretty-printing PLAN files back to wisp and saving each pin into
 `snap/$hash.plan`.  The same Wisp reader is then used to resume from these
 snapshots.  And this lets you explore the snapshots in a text editor,
 so that you can easily see everything that's going on.
+
+## Running
+
+`flake.nix` should be pull in all of the dependencies that you need
+for this.  If you don't use Nix, then it's just a simple Haskell
+program with a few standard dependencies.  Just look at `flake.nix`
+to get a list of the dependencies, and then install them yourself.
