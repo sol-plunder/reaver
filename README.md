@@ -1,6 +1,6 @@
 # Reaver Scheme
 
-This contains an implementation of Reaver, a scheme-like language for
+This contains an implementation of Reaver, a Scheme-like language for
 the PLAN ISA.  Because Reaver is implemented directly in
 PLAN, any implementation of PLAN should be able to run
 this code.
