@@ -30,28 +30,3 @@ Just run `x/reaver` to build everything and get a Reaver REPL.
 for this.  If you don't use Nix, then it's just a simple Haskell
 program with a few standard dependencies.  Just look at `flake.nix`
 to get a list of the dependencies, and then install them yourself.
-
-
-## Needed Polish
-
-The REPL exits on error, instead of catching exceptions.  This is easily
-fixed.
-
-Making changes Reaver and reloading nukes your state.  This can be solved
-by adding a `variables` table to the reaver state (unbalanced BST from nats
-to PLANs), and then having Reaver keep this state from the old sessions
-if there is an existing snapshot.
-
-The reason for using an unbalanced BST is that it is dead simple, and so
-that changes to Reave itself wont invalidate the variables table.
-
-
-## Initial Applications
-
-The right first thing to do with this is to start building out some
-very simple applications directly in the REPL, and then grow from there.
-
-TODOs, time tracking, a line editor.
-
-Application state should be kept in the `variables` table until Reaver
-itself is frozen.
