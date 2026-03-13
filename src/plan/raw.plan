@@ -1,0 +1,19 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+(#bind id
+  (#pin
+    (#law "id" (id x) x)))
+
+(#law "unwrapped" (foo x) (#(id) x)) ; no constant wrapper
+
+(#law "wrapped" (bar x) (id x))    ; constant wrapper
+
+( (#law "eat" (_ x)   #(0))    ; manual expression splicing (self-ref)
+  0 0 0 0 0 0 0 0)
+
+(#law "letted" (bar x)
+  x1(1 x)
+  x11(1 x1)
+  (0 x1 x11))

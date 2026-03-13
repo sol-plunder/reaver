@@ -1,0 +1,11 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+(#bind stdlib (#module stdlib))
+(#import stdlib)
+
+(define todo 0)
+(define todo (todo ("TODO" "More compact printer")))
+(define todo (todo ("TODO" "PLAN Printer")))
+(define todo (todo ("TODO" "Error Handling")))

@@ -1,0 +1,33 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+;;; Basics ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+("Hello" "World!")
+(#pin 3)
+(#bind zero 0)
+zero
+
+
+;;; Imports ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind bplan (#module bplan))
+(#import bplan)
+
+
+;;; Local Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#let ((x 3))
+  (#letmacro ((quote (#fun nopin noinline "quote" (quote _ u g _ _ form)
+                       (0 u g (1 form))))
+              (zero (#fun nopin noinline "zero" (zero _ u g _ _ form)
+                       (0 u g (1 0)))))
+    (#letmacro ((example (#fun nopin noinline "example" (example _ u g _ _ form)
+                           (0 u g (1 (quote form))))))
+      (x quote zero example (example (quote x)) (zero x)))))
+
+
+;;; Exports ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#export zero)

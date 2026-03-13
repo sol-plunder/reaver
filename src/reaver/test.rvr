@@ -1,0 +1,7 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+(#bind zero 0)
+zero
+(zero zero zero)

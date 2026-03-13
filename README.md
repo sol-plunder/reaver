@@ -1,0 +1,19 @@
+# Reaver Scheme
+
+This contains an implementation of Reaver, a scheme-like language for
+the PLAN ISA, and also a simple reference implementation of PLAN and
+Wisp which is sufficient for testing Reaver, but which is not going to
+have the performance or scalability needed for real applications.
+
+Reaver is implemented in Wisp, which is a simple s-expression syntax
+for PLAN with the ability to name expressions and define macros.
+
+Reaver is indented to be used as the first language that lets you "live
+in" a PLAN machine.  The intention is that it be used as a builting
+block to build more sophisticated toolchains.
+
+The PLAN implementation includes a snapshotting system which works by
+pretty-printing PLAN files back to wisp and saving each pin into
+`snap/$hash.plan`.  The same Wisp reader is then used to resume from these
+snapshots.  And this lets you explore the snapshots in a text editor,
+so that you can easily see everything that's going on.

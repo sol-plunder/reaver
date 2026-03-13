@@ -1,0 +1,395 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@data0
+
+;;;; Compile
+;;;; =======
+;;;;
+;;;; This module turns a Fun (a compiled function with a flat binding
+;;;; table) into a PLAN law.  It has three parts:
+;;;;
+;;;; 1.  Analysis: walk the Code body and count how many times each
+;;;;     binding is referenced.
+;;;;
+;;;; 2.  Code generation: emit a PLAN law, using the refcounts to
+;;;;     decide which bindings to keep, which to inline, and which
+;;;;     to drop.
+;;;;
+;;;; 3.  Lambda lifting: if the function references variables from
+;;;;     an enclosing scope, restructure it to take those as extra
+;;;;     arguments, then re-analyse and codegen the result.
+;;;;
+;;;; The entry point is =compile=, which ties all three together.
+;;;;
+;;;;
+;;;; Data Types
+;;;; ----------
+;;;;
+;;;;     data Code                       -- Output IR (law-like)
+;;;;         = VAL Any                   --   Constant value
+;;;;         | VAR Nat                   --   Reference (unique key)
+;;;;         | APP Code Code             --   Function application
+;;;;
+;;;;     data Fun = FUN                  -- Compiled function
+;;;;         { pinned :: Bool            --   Pin the raw law?
+;;;;         , name   :: Nat             --   PLAN law name
+;;;;         , self   :: Nat             --   Unique key for self-reference
+;;;;         , args   :: [Nat]           --   Unique keys for each argument
+;;;;         , binds  :: Array Code      --   Binding table (key -> expression)
+;;;;         , body   :: Code            --   The function body
+;;;;         }
+
+(defval VAL 0)
+(defval VAR 1)
+(defval APP 2)
+
+(defval FUN 0)
+(defval .fun-pinned Ix0)
+(defval .fun-name   Ix1)
+(defval .fun-self   Ix2) (defval fun-self=  (Up 2))
+(defval .fun-args   Ix3) (defval fun-args=  (Up 3))
+(defval .fun-binds  Ix4) (defval fun-binds= (Up 4))
+(defval .fun-body   Ix5) (defval fun-body=  (Up 5))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Reference Counting
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;
+;;;; Walk the Code body and produce an array of refcounts indexed by
+;;;; unique key.  Each entry holds the number of times that key is
+;;;; referenced.
+;;;;
+;;;; We don't eagerly analyse the expressions of let-bindings.  Instead,
+;;;; we only process a binding's expression when we first encounter a
+;;;; reference to it.  Unused bindings are never analysed, so their
+;;;; sub-references are never counted.  This is what makes dead code
+;;;; elimination work.
+;;;;
+;;;; We maintain a "seen" bitfield to track which bindings have already
+;;;; had their expressions analysed.  Without this, a second reference
+;;;; to a binding would re-analyse its expression, inflating the
+;;;; refcounts of everything it references.
+;;;;
+;;;; This is represented as a single tagged array, with the `seen`
+;;;; bitfield as the tag.
+;;;;
+;;;;     (seen count1 count2 count3...)
+
+(patfun (is-ref-let-bound? fun ref)
+  (Ix ref (.fun-binds fun)))
+
+(patfun (bump k st)
+  count(Inc (Ix k st))
+  (Seq count
+    (Up k count st)))
+
+(patfun (is-unseen-ref-to-let ref fun st)
+  (And (Nil (Test ref (Hd st)))
+    (is-ref-let-bound? fun ref)))
+
+(patfun (countloop fun st sx[a b])
+  (union-switch sx
+    (VAL st)
+    (APP (countloop fun (countloop fun st a) b))
+    (VAR (bump a
+           (Ifz (is-unseen-ref-to-let a fun st) st
+             (countloop fun
+               (Coup (Set a (Hd st)) st)
+               (Ix a (.fun-binds fun))))))))
+
+(patfun (refcount fun)
+  (countloop fun
+    (Rep 0 0 (Sz (.fun-binds fun)))
+    (.fun-body fun)))
+
+
+;; Test
+
+(tests
+  ((VAR 5) (is-ref-let-bound? (FUN 0 0 0 0 [0 (VAR 5)] 0) 1))
+  (0       (is-ref-let-bound? (FUN 0 0 0 0 [0 (VAR 5)] 0) 0)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Code Generation
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;
+;;;; Given a Fun and its refcounts, emit a PLAN law.  Three
+;;;; optimizations are applied:
+;;;;
+;;;; -   Dead binding elimination: bindings with refcount zero are
+;;;;     omitted.
+;;;;
+;;;; -   Single-use inlining: bindings referenced exactly once are
+;;;;     inlined at their reference site.
+;;;;
+;;;; -   Constant quoting: values that would be misinterpreted as
+;;;;     code in a law body are quoted with (0 v).
+
+;; =is-single-use-let?= — referenced exactly once and is a
+;; let-binding.
+
+(patfun (is-single-use-let? counts fun ref)
+  (And
+    (is-ref-let-bound? fun ref)
+    (Eq 1 (Ix ref counts))))
+
+(tests
+  (1 (is-single-use-let? [0 1] (FUN 0 0 0 0 [0 (VAR 5)] 0) 1))
+  (0 (is-single-use-let? [0 2] (FUN 0 0 0 0 [0 (VAR 5)] 0) 1))
+  (0 (is-single-use-let? [0 1] (FUN 0 0 0 0 [0 0]       0) 1)))
+
+;; =should-keep-bind?= — present in binds and referenced more than
+;; once.
+
+(patfun (should-keep-bind? counts fn ref)
+  (And (Ix ref (.fun-binds fn))
+    (Gt (Ix ref counts) 1)))
+
+(tests
+  (1 (should-keep-bind? [0 2] (FUN 0 0 0 0 [0 (VAR 5)] 0) 1))
+  (0 (should-keep-bind? [0 1] (FUN 0 0 0 0 [0 (VAR 5)] 0) 1))
+  (0 (should-keep-bind? [0 2] (FUN 0 0 0 0 [0 0]       0) 1))
+  (0 (should-keep-bind? [0 0] (FUN 0 0 0 0 [0 (VAR 5)] 0) 1)))
+
+;; =isCode= determines whether a PLAN value, when placed into a law
+;; body, would be interpreted as code rather than as a literal
+;; constant.  Nats up to =maxref= are variable references.  Apps of
+;; the form (0 x) are calls, (1 x y) are let-bindings.  Pins and
+;; laws are never code.
+;;
+;; In the outermost position, (1 x y) is ambiguous with
+;; let-expressions, so =is-outer-expr?= controls that case.
+;;
+;; When =isCode= returns true, the value must be quoted as (0 v).
+
+(patfun (app-is-code? outer x)
+  hx(Hd x)
+  (Case3 (Dec (Sz x))
+    (Nil hx)                            ; 0[a]   -> 1
+    (Or (Nil hx) (And outer (Eq 1 hx))) ; 0[a b] -> 1
+    0))                                 ; _      -> 0
+
+(patfun (isCode outer maxref v)
+  (Case4 (Type v)
+    (Le v maxref)            ; Nat
+    0                        ; Pin
+    0                        ; Law
+    (app-is-code? outer v))) ; App
+
+(tests
+  ( (isCode 0 5 (1 9))   0 )
+  ( (isCode 0 5 (0 9))   1 )
+  ( (isCode 1 5 (1 0 0)) 1 )
+  ( (isCode 0 5 (1 0 0)) 0 )
+  ( (isCode 1 5 (0 0 0)) 1 )
+  ( (isCode 0 5 (0 0 0)) 1 )
+  ( (isCode 0 5 0)       1 )
+  ( (isCode 0 5 5)       1 )
+  ( (isCode 0 5 6)       0 ))
+
+;; Code emission.  =cgen= handles the outermost position (where
+;; let-shaped values need quoting), =cgen-inner= handles everything
+;; else.  Both dispatch on the Code tag and recurse.
+
+(patfun (cgen outer table counts maxref fn s[a b])
+  (union-switch s
+    (VAL (If (isCode outer maxref a) (0 a) a))
+
+    (VAR (If (is-single-use-let? counts fn a)
+           (cgen outer table counts maxref fn
+             (Ix a (.fun-binds fn)))
+           (Ix a table)))
+
+    (APP (0 (cgen 0 table counts maxref fn a)
+            (cgen 0 table counts maxref fn b)))))
+
+;; =genlet-step= wraps a let-binding around the rest of the law body.
+;; In PLAN, a let is encoded as (1 value body).
+
+(patfun (genlet-step table counts maxref fn k rest)
+  (1
+    (cgen 1 table counts maxref fn (Ix k (.fun-binds fn)))
+    rest))
+
+;; =codegen= is the code generation entry point.  It scans all keys,
+;; keeps multi-use bindings, builds a translation table mapping each
+;; variable (self, args, kept bindings) to a sequential PLAN law
+;; position, and emits the law body.
+;;
+;; =maxref= is one more than the total variable count, used by
+;; =isCode= to distinguish variable references from constants.
+;;
+;; =Law= receives (Dec nArg) because the arg list includes the
+;; self-reference, but PLAN law arity counts only user-visible args.
+
+(patfun (codegen fn counts)
+  nBind(Sz (.fun-binds fn))
+  fArg(.fun-args fn)
+  fSlf(.fun-self fn)
+  binds(lfilter (should-keep-bind? counts fn)
+                (ltake nBind (lenumFrom 0)))
+  nKeep(llen binds)
+  nArg(llen fArg)
+  maxref(Inc (Add nArg nKeep))
+  scope(lcons fSlf (lweld fArg binds))
+
+  table(lfoldl {t kv -> (Up (.0 kv) (.1 kv) t)}
+         (Rep 0 0 nBind)
+         (lzip scope (lrange 0)))
+
+  law(Law (Dec nArg) (.fun-name fn)
+       (lfoldr
+         (genlet-step table counts maxref fn)
+         (cgen 1 table counts maxref fn (.fun-body fn))
+         binds))
+
+  (If (.fun-pinned fn) (Pin law) law))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Lambda Lifting
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;
+;;;; =compile= ties together analysis, codegen, and lambda lifting.
+;;;;
+;;;; After analysis, we scan all keys in definition order, filtering
+;;;; for those that are "free" — referenced but not the self-reference,
+;;;; not an argument, and not a let-binding.  These become additional
+;;;; arguments to the lifted function.
+;;;;
+;;;; The self-reference is updated so that recursive calls automatically
+;;;; pass along the captured free variables: instead of just (VAR self),
+;;;; it becomes (VAR self) applied to all free variables.
+;;;;
+;;;; If there are no free variables, we skip the restructuring and use
+;;;; the original function and counts directly.
+;;;;
+;;;; The output is a pair [plan-value, free-var-list], where the
+;;;; free-var list tells the caller which variables to pass when
+;;;; calling the lifted function.
+
+;; =is-free?= checks whether a key is free with respect to a function:
+;; not self, not an argument, not a let-binding.
+
+(patfun (is-free? fn ref)
+  (Nor (Eq (.fun-self fn) ref)
+    (Or (Ix ref (.fun-binds fn))
+      (lhas ref (.fun-args fn)))))
+
+(patfun (cf-step rc fun k)
+  (And (Ix k rc)
+    (is-free? fun k)))
+
+;; compile : Fun -> (Any, List Nat)
+
+(patfun (compile f0[pin0 tag0 slf0 arg0 bin0 bod0])
+  {rc0             = (refcount f0)}
+  {n0              = (Sz bin0)}
+  {free            = (lfilter (cf-step rc0 f0)
+                       (countdown n0))}
+  {newSelf         = (lfoldl APP (VAR n0) (lmap VAR free))}
+  {f1              = (fun-self=(n0)
+                       (fun-args=(lweld free arg0)
+                         (fun-binds=(Up slf0 newSelf (snoc bin0 0))
+                           f0)))}
+  (Seq rc0
+    [ (codegen (Ifz free f0 f1)
+               (Ifz free rc0 (refcount f1)))
+      free]))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Integration Tests
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; Codegen ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Constant body, no bindings.
+
+(tests
+  ((#law "k" (k a b) #(42))
+   (codegen (FUN 0 "k" 0 ~[1 2] [0 0 0] (VAL 42))
+     [0 0 0])))
+
+;; Body returns an argument.
+
+(tests
+  ((#law "id" (id x y) y)
+   (codegen (FUN 0 "id" 0 ~[1 2] [0 0 0] (VAR 2))
+     [0 0 1])))
+
+;; Single-use binding is inlined at reference site.
+
+(tests
+  ((#law "f" (f x y) (#(Inc) #(2)))
+   (codegen
+     (FUN 0 "f" 0 ~[1 2] [0 0 0 (APP (VAL Inc) (VAR 2))] (VAR 3))
+     [0 0 1 1])))
+
+;; Multi-use binding is kept as a let-binding.
+
+(tests
+  ((#law "f" (f x y) z(#(Inc) #(2)) (z z))
+   (codegen
+     (FUN 0 "f" 0 ~[1 2] [0 0 0 (APP (VAL Inc) (VAR 2))]
+       (APP (VAR 3) (VAR 3)))
+     [0 0 1 2])))
+
+;; Unreferenced binding is eliminated.
+
+(tests
+  ((#law "f" (f x y) y)
+   (codegen
+     (FUN 0 "f" 0 ~[1 2] [0 0 0 (APP (VAL Inc) (VAR 2))] (VAR 2))
+     [0 0 1 0])))
+
+;; Body returns self-reference.
+
+(tests
+  ((#law "rec" (rec a b) rec)
+   (codegen (FUN 0 "rec" 0 ~[1 2] [0 0 0] (VAR 0))
+     [1 0 0])))
+
+;; Pinned law.
+
+(tests
+  ((Pin (#law "p" (p a b) b))
+   (codegen (FUN 1 "p" 0 ~[1 2] [0 0 0] (VAR 2))
+     [0 0 1])))
+
+;; Multiple kept bindings get correct variable positions.
+
+(tests
+  ((#law "f" (f a)
+     x(#(Inc) a)
+     y(#(Dec) a)
+     ((x x) (y y)))
+   (codegen
+     (FUN 0 "f" 0 ~[1]
+       [0 0 (APP (VAL Inc) (VAR 1)) (APP (VAL Dec) (VAR 1))]
+       (APP (APP (VAR 2) (VAR 2)) (APP (VAR 3) (VAR 3))))
+     [0 2 2 2])))
+
+;; Mixed single-use and multi-use.
+
+(tests
+  ((#law "g" (g a)
+     x(#(Inc) a)
+     ((x x) (x #(5))))
+   (codegen
+     (FUN 0 "g" 0 ~[1]
+       [0 0 (APP (VAL Inc) (VAR 1)) (APP (VAR 2) (VAL 5))]
+       (APP (APP (VAR 2) (VAR 2)) (VAR 3)))
+     [0 1 3 1])))
+
+;; Constant quoting: 0 looks like a variable reference and must be
+;; quoted.
+
+(tests
+  ((#law "z" (z a b) 0)
+   (codegen (FUN 0 "z" 0 ~[1 2] [0 0 0] (VAL 0))
+     [0 0 0])))

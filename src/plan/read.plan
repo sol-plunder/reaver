@@ -1,0 +1,869 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+@bst
+@global
+@pretty
+
+;;;; read.wisp — Reaver S-Expression Parser
+;;;;
+;;;; Tokenizes, scans, locates, and parses Wisp source text into
+;;;; an AST of PLAN values.
+;;;;
+;;;; Sexp representation:
+;;;;   n                     -> symbol (packed NAT)
+;;;;   (1 v)                 -> atom (embedded PLAN value)
+;;;;   (0 x..)               -> paren
+;;;;   (0 "BRAK" x..)        -> brackets [..]
+;;;;   (0 "CURL" x..)        -> curlies {..}
+;;;;   (0 "JUXT" s x)        -> juxtaposition: s immediately followed by x
+;;;;   (0 "JUXT" "+" x y z)  -> juxtaposed infix (no spaces): x+y+z
+;;;;
+;;;; Token types (tags 0-6):
+;;;;   0 = TT_SPACE   1 = TT_OPEN    2 = TT_CLOSE
+;;;;   3 = TT_STRING  4 = TT_SYMBOL  5 = TT_ERROR  6 = TT_RUNE
+;;;;
+;;;; (TODO: TT_ERROR should be last (or 0))
+;;;;
+;;;; Tokens are (tt s) where tt is the tag NAT and s is a lazy byte list.
+;;;; Located tokens (after locate) are (l c tt s) where Hd=l, Ix0=c,
+;;;; Ix1=tt, Ix2=s.
+;;;;
+;;;; Runic characters like + and . are parsed separately from symbol
+;;;; characters, so `'foo` is quoted "foo", not the symbol "'foo".
+;;;; The same rules apply to juxtaposed infix expressions: `Map.empty`
+;;;; `a+b*c`, etc.  Rune characters are allowed at the end of symbols
+;;;; and work normally there: `is-empty?`, etc.
+;;;;
+;;;; Infix forms have a simple precedence system, taken from Rex, which
+;;;; was inspired by the Scala system.  (characters like `+`, `.`, `*`, `%`
+;;;; etc.) have precedence determined by their position in a fixed
+;;;; ranking string `",:$\`~@?\\|^&=!<>+*/%."`, where characters appearing
+;;;; later bind more tightly. When two rune strings are compared, their
+;;;; characters are ranked positionally and the comparison proceeds
+;;;; left-to-right, with the higher-ranked character winning; if the
+;;;; characters are equal, the *shorter* string wins — so `.` binds more
+;;;; tightly than `..`. This means precedence is entirely intrinsic to the
+;;;; rune characters themselves, with no operator declarations required.
+;;;;
+;;;; Source text passes through four stages: `tokenize` converts a raw byte
+;;;; stream into a lazy list of `(tt s)` tokens; `scan` groups those tokens
+;;;; into top-level form boundaries, producing a list of token subsequences
+;;;; each representing one complete expression, which is how the REPL
+;;;; detects that the user has finished entering a form; `locate` annotates
+;;;; each token with its line and column, producing `(l c tt s)` tuples;
+;;;; and finally `parse` converts the located token stream into the sexp AST.
+;;;;
+;;;; The module exports a single entry point which transforms a lazy stream
+;;;; of input bytes into a lazy stream of forms.
+;;;;
+;;;;     readAll : Bool -> List Byte -> List [Nat, Nat, Sexp]
+;;;;
+;;;; The `Bool` flag selects error-handling mode: in interactive mode
+;;;; (`1`), parse errors are printed to output and skipped, allowing the
+;;;; REPL to continue; in batch mode (`0`), errors are rethrown and halt
+;;;; processing. The result is a lazy list of triples `[line, col, sexp]`
+;;;; giving the source position of each successfully parsed top-level
+;;;; expression alongside its AST.
+
+
+;;; TODO ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; TODO readAll should produce a list of Either values isntead of
+; printing errors or crashing.  Let the consumer handle it!
+
+; TODO: Location tracking is over-engineered. Per-token location annotation
+; (locate) and LOC nodes in the AST are unused by all consumers — readAll
+; already captures the start position of each form directly. Simplify by:
+;   - Replacing locate with a function that just advances [l c] through a
+;     form's raw tokens (counting newlines in whitespace tokens) and returns
+;     the new position, with no per-token annotation.
+;   - Removing LOC from the AST and stripping the corresponding LOC-insertion
+;     logic from parse.
+;   - Having parse operate on plain (tt s) tokens again.
+
+; TODO: Unlines in stdlib.
+
+
+;;; Token type tags ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define TT_SPACE  0)
+(define TT_OPEN   1)
+(define TT_CLOSE  2)
+(define TT_STRING 3)
+(define TT_SYMBOL 4)
+(define TT_ERROR  5)
+(define TT_RUNE   6)
+
+;;; Character constants ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define dquote  34)
+(define newline 10)
+(define semi    59)
+
+;;; Number parsing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; loadNum : Nat -> List Byte -> Nat
+(define (loadNum acc bs[c cs])
+  (Seq acc
+    (Ifz bs acc
+      (loadNum (Add (Mul 10 acc) (Sub c 48)) cs))))
+
+(tests
+  (0   (loadNum 0 NIL))
+  (123 (loadNum 0 (lexplode "123"))))
+
+;;; Character classification ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Runic chars: ! , + ' @ . ? * / < = > & ^ ~ : % \
+; Backslash (92) appended separately as it can't appear in string literals.
+(define runicBits
+  (lfoldr Set 0
+    (lexplode "|$!,+'`@.?*\/<=>&^~:%")))
+
+; isRunic   : Byte -> Bool
+(define (isRunic c)   (Test c runicBits))
+; isDigit   : Byte -> Bool
+(define (isDigit c)   (And (Le 48 c) (Le c 57)))
+; isAlpha   : Byte -> Bool
+(define (isAlpha c)   (If (And (Le 65 c) (Le c 90)) 1 (And (Le 97 c) (Le c 122))))
+; isAlNum   : Byte -> Bool
+(define (isAlNum c)   (Or (isAlpha c) (isDigit c)))
+; isInitial : Byte -> Bool
+(define (isInitial c) (or (isAlNum c) (Eq c "_") (Eq c "-") (Gt c 127) (Eq c "#")))
+; isSubseq  : Byte -> Bool
+(define (isSubseq c)  (Or (isInitial c) (isRunic c)))
+
+(tests
+  (1 (isRunic 33))    ; !
+  (0 (isRunic 0))     ; !
+  (0 (isRunic 65))    ; A
+  (1 (isDigit 48))    ; 0
+  (0 (isDigit 65))    ; A
+  (1 (isInitial 65))  ; A
+  (0 (isInitial 33))  ; !
+  (1 (isSubseq 33))   ; ! (runic is subsequent)
+  (1 (isSubseq 65)))  ; A
+
+; 256-entry classify table: byte -> token type tag.
+(define classifyTable
+  (strGen 256 {c ->
+    (cond
+      ((Or (isSpcChr c) (Eq c semi)) TT_SPACE)
+      ((Or (Eq c "(") (Or (Eq c "[") (Eq c "{"))) TT_OPEN)
+      ((Or (Eq c ")") (Or (Eq c "]") (Eq c "}"))) TT_CLOSE)
+      ((Eq c dquote)  TT_STRING)
+      ((isRunic c)    TT_RUNE)
+      ((isInitial c)  TT_SYMBOL)
+      (else           TT_ERROR))}))
+
+; classify : Byte -> TT
+(define (classify c)
+  (Load8 c classifyTable))
+
+(tests
+  (TT_SPACE  (classify " "))
+  (TT_SPACE  (classify ";"))
+  (TT_OPEN   (classify "("))
+  (TT_OPEN   (classify "["))
+  (TT_OPEN   (classify "{"))
+  (TT_CLOSE  (classify ")"))
+  (TT_CLOSE  (classify "]"))
+  (TT_CLOSE  (classify "}"))
+  (TT_STRING (classify dquote))
+  (TT_RUNE   (classify "!"))
+  (TT_SYMBOL (classify "A"))
+  (TT_ERROR  (classify 0)))
+
+
+;;; Rune Precedence ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; rune-prec-impl : Byte -> Nat
+(define (rune-prec-impl c)
+  (define runes ",:$`~@?\\|^&=!<>+*/%.")
+  (define count (Bytes runes))
+  (define pos   (lsearch c (Row 0 count (lexplode runes))))
+  (Mod (Inc pos) (Inc count)))
+
+(define rune-prec-table
+  (strGen 256 rune-prec-impl))
+
+; rune-prec : Byte -> Nat
+(define (rune-prec c)
+  (Load8 c rune-prec-table))
+
+(tests
+  ([21 0 0 1 20] (map rune-prec-impl ["." "A" " " "," "%"]))
+  ([21 0 0 1 20] (map rune-prec      ["." "A" " " "," "%"])))
+
+; rune-cmp : Str -> Str -> Nat -> Ordering   (Ordering = LT|EQ|GT)
+(define (rune-cmp a b i)
+  (define ca (Load8 i a))
+  (define cb (Load8 i b))
+  (define ra (rune-prec ca))
+  (define rb (rune-prec cb))
+  (cond
+    ((And (Nil ca) (Nil cb)) EQ)
+    ((Nil ca)                GT)
+    ((Nil cb)                LT)
+    ((Lt ra rb)              LT)
+    ((Lt rb ra)              GT)
+    (else                    (rune-cmp a b (Inc i)))))
+
+; rune-tighter? : Str -> Str -> Bool
+(define (rune-tighter? a b)
+  (Eq GT (rune-cmp a b 0)))
+
+; . is tighter than +
+; shorter is tighter: . vs ..
+; equal runes
+; first char dominates
+(tests
+  (1  (rune-tighter? "." "+"))
+  (0  (rune-tighter? "+" "."))
+  (1  (rune-tighter? "." ".."))
+  (0  (rune-tighter? ".." "."))
+  (EQ (rune-cmp "." "." 0))
+  (EQ (rune-cmp "++" "++" 0))
+  (1  (rune-tighter? "." "+?"))
+  (0  (rune-tighter? "+?" ".")))
+
+
+;;; Token length functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; inCom: 0 = normal whitespace, 1 = inside line comment.
+; tokSzSpace : Bool -> List Byte -> Nat -> Nat
+(define (tokSzSpace inCom cs[c rest] acc)
+  (cond
+    ((Nil cs)                   acc)
+    ((And inCom (Eq c newline)) (Inc acc))
+    (inCom                      (tokSzSpace 1 rest (Inc acc)))
+    ((Eq c semi)                (tokSzSpace 1 rest (Inc acc)))
+    ((isSpcChr c)               (Inc acc))
+    (else                       acc)))
+
+; tokSzRune : List Byte -> Nat -> Nat
+(define (tokSzRune cs[c rest] acc)
+  (cond
+    ((Nil cs)    acc)
+    ((isRunic c) (tokSzRune rest (Inc acc)))
+    (else        acc)))
+
+; A symbol token is:
+;   [{:initial:}]+ [{:runic:}]*
+; where the trailing rune run is included only if NOT followed by an initial char.
+; tokSzSymbol : List Byte -> Nat -> Nat
+(define (tokSzSymbol cs acc)
+
+  ; Count runes; include them only if not followed by an initial char.
+  (define (count-runes cs[c rest] symAcc runeAcc)
+    (cond
+      ((Nil cs)      (Add symAcc runeAcc))  ; end of input: include runes
+      ((isRunic c)   (count-runes rest symAcc (Inc runeAcc)))
+      ((isInitial c) symAcc)                ; followed by symbol: exclude runes
+      (else          (Add symAcc runeAcc))));followed by other: include runes
+
+  ; Phase 2: optionally consume a trailing rune run.
+  (define (rune-phase cs[c rest] acc)
+    (If (And cs (isRunic c))
+      (count-runes cs acc 0)
+      acc))
+
+  ; Phase 1: consume all initial chars.
+  (define (init-phase cs[c rest] acc)
+    (cond
+      ((Nil cs)      (rune-phase cs acc))
+      ((isInitial c) (init-phase rest (Inc acc)))
+      (else          (rune-phase cs acc))))
+
+  (init-phase cs acc))
+
+; tokSzString : List Byte -> Nat -> Nat   (returns 0 for unterminated string)
+(define (tokSzString cs[c rest] acc)
+  (Seq acc
+    (cond
+      ((Nil cs)      0)
+      ((Eq c dquote) (Inc acc))
+      (else          (tokSzString rest (Inc acc))))))
+
+; tokSz : TT -> List Byte -> Nat
+(define (tokSz tt cs[c rest])
+  (cond
+    ((Eq tt TT_SPACE)  (tokSzSpace 0 cs 0))
+    ((Eq tt TT_STRING) (tokSzString rest 1))
+    ((Eq tt TT_RUNE)   (tokSzRune rest 1))
+    ((Eq tt TT_SYMBOL) (tokSzSymbol rest 1))
+    (else              1)))
+
+;;; Tokenizer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Produces a lazy list of (tt s) tokens where s is a lazy byte list.
+
+; tokenize : List Byte -> List Token
+(define (tokenize cs[c rest])
+  (define tt (classify c))
+  (define n (tokSz tt cs))
+  (cond
+    ((Nil cs) 0)
+    ((Nil n)  [(TT_ERROR cs) NIL])
+    (else     [(tt (ltake n cs)) (tokenize (ldrop n cs))])))
+
+
+;;; Tokenizer tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Helpers: extract tt and string content from a token.
+; tokTT  : Token -> TT
+(define (tokTT  tok) (Hd tok))
+; tokStr : Token -> Str
+(define (tokStr tok) (limplode (Ix0 tok)))
+
+; enquote : List Byte -> List Byte
+(define (enquote str)
+  (lcons dquote (lsnoc str dquote)))
+
+(tests
+  ; Empty input produces NIL.
+  (NIL (tokenize NIL))
+
+  ; Single symbol.
+  (TT_SYMBOL (tokTT  (Ix0 (tokenize (lexplode "foo")))))
+  ("foo"     (tokStr (Ix0 (tokenize (lexplode "foo")))))
+
+  ; Symbol then space: two tokens.
+  (TT_SYMBOL (tokTT  (Ix0 (tokenize (lexplode "foo ")))))
+  (TT_SPACE  (tokTT  (Ix0 (Ix1 (tokenize (lexplode "foo "))))))
+  ("foo"     (tokStr (Ix0 (tokenize (lexplode "foo ")))))
+  (" "       (tokStr (Ix0 (Ix1 (tokenize (lexplode "foo "))))))
+
+  ; All-digit symbol (number parsing happens in the parser, not the tokenizer).
+  (TT_SYMBOL (tokTT  (Ix0 (tokenize (lexplode "123")))))
+  ("123"     (tokStr (Ix0 (tokenize (lexplode "123")))))
+
+  ; String token includes surrounding quotes.
+  (TT_STRING (tokTT  (Ix0 (tokenize (enquote (lexplode "hello"))))))
+
+  ; Bracket tokens.
+  (TT_OPEN  (tokTT  (Ix0 (tokenize (lexplode "(")))))
+  (TT_OPEN  (tokTT  (Ix0 (tokenize (lexplode "[")))))
+  (TT_OPEN  (tokTT  (Ix0 (tokenize (lexplode "{")))))
+  (TT_CLOSE (tokTT  (Ix0 (tokenize (lexplode ")")))))
+  (TT_CLOSE (tokTT  (Ix0 (tokenize (lexplode "]")))))
+  (TT_CLOSE (tokTT  (Ix0 (tokenize (lexplode "}"))))))
+
+; unlines : List (List Byte) -> List Byte
+(define (unlines strings[s ss])
+  (And strings
+    (lweld (lsnoc s newline)
+      (unlines ss))))
+
+(tests
+  ; Runic char produces a TT_RUNE token.
+  (TT_RUNE  (tokTT  (Ix0 (tokenize (lexplode "'")))))
+  ("'"      (tokStr (Ix0 (tokenize (lexplode "'")))))
+
+  ; Runic does NOT absorb following alphabetic chars: 'foo -> ' then foo.
+  ("'"      (tokStr (Ix0 (tokenize (lexplode "'foo")))))
+  ("foo"    (tokStr (Ix0 (Ix1 (tokenize (lexplode "'foo"))))))
+
+  ; Multiple consecutive runes form a single rune token.
+  (TT_RUNE  (tokTT  (Ix0 (tokenize (lexplode "??")))))
+  ("??"     (tokStr (Ix0 (tokenize (lexplode "??")))))
+
+  ; Symbol absorbs trailing runes when NOT followed by another symbol char.
+  ("foo+"   (tokStr (Ix0 (tokenize (lexplode "foo+")))))
+
+  ; Symbol does NOT absorb runes when followed by another symbol char.
+  ("foo"    (tokStr (Ix0 (tokenize (lexplode "foo+bar")))))
+  ("+"      (tokStr (Ix0 (Ix1 (tokenize (lexplode "foo+bar"))))))
+  ("bar"    (tokStr (Ix0 (Ix1 (Ix1 (tokenize (lexplode "foo+bar")))))))
+
+  ; ?a?b?c? lexes as: RUNE ? | SYMBOL a | RUNE ? | SYMBOL b | RUNE ? | SYMBOL c?
+  ([[TT_RUNE "?"] [TT_SYMBOL "a"]
+    [TT_RUNE "?"] [TT_SYMBOL "b"]
+    [TT_RUNE "?"] [TT_SYMBOL "c?"]]
+   (map {ts -> [(tokTT ts) (tokStr ts)]}
+    (array (tokenize (lexplode "?a?b?c?")))))
+
+  ; Comment is consumed as part of the space token.
+  (TT_SPACE (tokTT  (Ix0 (tokenize (unlines ~[(lexplode "; hi")])))))
+
+  ((strWeld "; hi" newline)
+   (tokStr (Ix0 (tokenize (unlines ~[(lexplode "; hi")])))))
+
+  ; Comment followed by symbol: space token then symbol token.
+  (TT_SPACE  (tokTT  (Ix0 (tokenize (unlines ~[(lexplode "; hi\nfoo")])))))
+
+  (TT_SYMBOL
+    (tokTT  (Ix0 (Ix1 (tokenize (unlines (lmap lexplode ~["; hi" "foo"]))))))))
+
+;;; Scanner ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Groups token lists into top-level form blocks before parsing.
+;;;
+;;; Blocks are produced greedily: consume tokens until a complete top-level
+;;; form is seen. "Junk" tokens (space, close, error) become singleton blocks.
+
+; rune-token? : Token -> Bool
+(define (rune-token? tok)
+  (Eq TT_RUNE (Hd tok)))
+
+; form-done? : List Token -> Bool
+; True if the next token is NOT a rune with a continuation.
+(define (form-done? rest[tok @[tok2 _]])
+  (not (and rest (rune-token? tok) tok2)))
+
+; scan-stop : List Token -> TT -> Nat -> List Token -> Nat -> Nat
+; Returns token count to stop at, or 0 to continue.
+(define (scan-stop ts[tok rest] d acc)
+  (define tt (Hd tok))
+  (cond
+    ((Nil ts)          acc)
+    ((Gt d 1)          0)
+    ((Eq d 1)          (and (Eq tt TT_CLOSE) (form-done? rest) (Inc acc)))
+    ((Eq tt TT_SPACE)  acc)
+    ((Eq tt TT_ERROR)  acc)
+    ((Eq tt TT_CLOSE)  (And (form-done? rest) (Inc acc)))
+    ((Eq tt TT_STRING) (And (form-done? rest) (Inc acc)))
+    (else              0)))
+
+; next-depth : TT -> Nat -> Nat
+(define (next-depth tt d)
+  (Add (Eq tt TT_OPEN)
+    (Sub d (Eq tt TT_CLOSE))))
+
+; scanGo : List Token -> Nat -> Nat -> Nat
+(define (scanGo ts[tok rest] acc d)
+  (Or (scan-stop ts d acc)
+    (scanGo rest (Inc acc) (next-depth (Hd tok) d))))
+
+; junk : Token -> Bool
+(define (junk tok)
+  (define tt (Hd tok))
+  (Or (Eq tt TT_SPACE)
+    (Or (Eq tt TT_CLOSE)
+      (Eq tt TT_ERROR))))
+
+; scan : List Token -> List (List Token)
+(define (scan ts[tok rest])
+  (cond
+    ((Nil ts)   0)
+    ((junk tok) [[tok NIL] (scan rest)])
+    (else       (let ((n (scanGo ts 0 0)))
+                  [(ltake n ts) (scan (ldrop n ts))]))))
+
+(define (tryScanGo str)
+  (scanGo (tokenize (lexplode str)) 0 0))
+
+(tests
+  (9
+    (tryScanGo "(#define value x 3)")))
+
+
+;;; Location tracking ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; posAfterBytes : List Byte -> Nat -> Nat -> [Nat, Nat]
+(define (posAfterBytes bs[b rest] l c)
+  (cond
+    ((Nil bs) [l c])
+    ((Eq b newline) (posAfterBytes rest (Inc l) 1))
+    (else           (posAfterBytes rest l (Inc c)))))
+
+; locate : Nat -> Nat -> List Token -> [Nat, Nat, List LocTok]
+(define (locate l c tvs[tok rest])
+  (Ifz tvs [l c NIL]
+    (let* ((s              (Ix0 tok))
+           (_p[l' c']      (posAfterBytes s l c))
+           (_r[l'' c'' ts] (locate l' c' rest)))
+      [l'' c'' [(l c (Hd tok) s) ts]])))
+
+;;; Location tracking tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; locate returns [finalL finalC locatedTokens].
+; Each located token is (l c tt s): Hd=l, Ix0=c, Ix1=tt, Ix2=s.
+; locStr : Str -> [Nat, Nat, List LocTok]
+(define (locStr str)
+  (locate 1 1 (tokenize (lexplode str))))
+
+; finalL : [Nat, Nat, List LocTok] -> Nat
+(define (finalL res) (Ix0 res))   ; was Hd
+; finalC : [Nat, Nat, List LocTok] -> Nat
+(define (finalC res) (Ix1 res))   ; was Ix0
+; locToks : [Nat, Nat, List LocTok] -> List LocTok
+(define (locToks res) (Ix2 res))  ; was Ix1
+
+; tokL : LocTok -> Nat
+(define (tokL tok) (Hd tok))
+; tokC : LocTok -> Nat
+(define (tokC tok) (Ix0 tok))
+
+(tests
+  ; Single symbol "foo": token at (1,1), final pos (1,4).
+  ([1 1 1 4]
+   [ (tokL (Ix0 (locToks (locStr "foo"))))
+     (tokC (Ix0 (locToks (locStr "foo"))))
+     (finalL (locStr "foo"))
+     (finalC (locStr "foo")) ]))
+
+(define res  (locStr "foo bar"))
+(define toks (locToks res))
+
+(tests
+  ; "foo bar": foo@(1,1), space@(1,4), bar@(1,5).
+  (1 (tokL (Ix0 toks)))                      ; foo:   line 1
+  (1 (tokC (Ix0 toks)))                      ; foo:   col 1
+  (1 (tokL (Ix0 (Ix1 toks))))               ; space: line 1
+  (4 (tokC (Ix0 (Ix1 toks))))               ; space: col 4
+  (1 (tokL (Ix0 (Ix1 (Ix1 toks)))))        ; bar:   line 1
+  (5 (tokC (Ix0 (Ix1 (Ix1 toks))))))       ; bar:   col 5
+
+(define nlInput
+  (lweld (lexplode "foo") [newline (lexplode "bar")]))
+(define res  (locate 1 1 (tokenize nlInput)))
+(define toks (locToks res))
+
+(tests
+  ; Newline resets col to 1 and increments line.
+  ; Input: "foo" newline "bar"
+  (1 (tokL (Ix0 toks)))                      ; foo:        line 1
+  (1 (tokC (Ix0 toks)))                      ; foo:        col 1
+  (1 (tokL (Ix0 (Ix1 toks))))               ; newline:    line 1
+  (4 (tokC (Ix0 (Ix1 toks))))               ; newline:    col 4
+  (2 (tokL (Ix0 (Ix1 (Ix1 toks)))))        ; bar:        line 2
+  (1 (tokC (Ix0 (Ix1 (Ix1 toks)))))        ; bar:        col 1
+  (2 (finalL res))                           ; final line: 2
+  (4 (finalC res)))                          ; final col:  4
+
+
+;;; Infix Forms ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; Tight sequence building ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Elements are rune-str (a nat) or (0 form) for expressions.
+;;;
+;;; Elem = Nat       -- ERune: a rune string
+;;;      | (0 Nat)   -- ESym:  a bare symbol string
+;;;      | (0 App)   -- EForm: a compound/list form
+
+; rune-form? : Elem -> Bool
+(define rune-form? IsNat)
+
+; form-sexp : (0 Sexp) -> Sexp
+(define form-sexp Ix0)
+
+; insert-rune : Str -> List Str -> List Str
+(define (insert-rune r sorted[s rest])
+  (Ifz sorted [r 0]
+    (cond
+      ((Eq r s)            sorted)
+      ((rune-tighter? r s) [s (insert-rune r rest)])
+      (else                [r sorted]))))
+
+; sorted-runes : List Elem -> List Str
+(define (sorted-runes elems[e rest])
+  (define tail (sorted-runes rest))
+  (And elems
+    (If (rune-form? e)
+      (insert-rune e tail)
+      tail)))
+
+; split-on-rune : Rune -> List Elem -> List (List elem)
+(define (split-on-rune rune elems)
+  (define (go elems[e rest] cur)
+    (cond
+      ((Nil elems) (lsing (lrev cur)))
+      ((Eq rune e) (lcons (lrev cur) (go rest 0)))
+      (else        (go rest [e cur]))))
+  (go elems 0))
+
+(define x (split-on-rune "+"))
+(tests
+  (~[~[["a"] ["b"]]]               (x ~[["a"] ["b"]]))
+  (~[~[["a"]] ~[["b"]]]            (x ~[["a"] "+" ["b"]]))
+  (~[~[["a"]] ~[["b"]] ~[["c"]]]   (x ~[["a"] "+" ["b"] "+" ["c"]]))
+  (~[~[["a"]] ~[["b"] "." ["c"]]]  (x ~[["a"] "+" ["b"] "." ["c"]])))
+
+; juxtE : Array Sexp -> Sexp
+(define (juxtE forms[f0])
+  (If (Eq 1 (Sz forms)) f0
+    (Weld ["JUXT"] forms)))
+
+; infix-group : List Str -> List Elem -> Sexp
+(define (infix-group runes[rune more-runes] elems[e0 more])
+  (Ifz runes (juxtE (array (lmap form-sexp elems)))
+    (let1 groups[group more-groups] (split-on-rune rune elems)
+      (If (Nil more-groups)
+        (infix-group more-runes elems) ; rune not present
+        (lfoldl {acc g -> (acc (infix-group more-runes g))}
+                ["JUXT" rune]
+                groups)))))
+
+(define (^ x)
+  (Trace ("Traced" x)
+    x))
+
+; runic : Array Elem -> Sexp
+(define (runic all)
+  (define (go elems[e es])
+    (cond
+      ((rune-form? e) (Ifz es e ["JUXT" e (go es)]))              ; prefix
+      ((Nil es)       (form-sexp e))                              ; single
+      (else           (infix-group (sorted-runes elems) elems)))) ; infix
+  (go (stream all)))
+
+(tests
+  ("foo"                                 (runic [["foo"]]))
+  (["JUXT" "foo" (1 "foo")]              (runic [["foo"] [1"foo"]]))
+  ("+"                                   (runic ["+"]))
+  (["JUXT" "+" "foo"]                    (runic ["+" ["foo"]]))
+  (["JUXT" "." "a" "b"]                  (runic [["a"] "." ["b"]]))
+  (["JUXT" "." "a" "b" "c"]              (runic [["a"] "." ["b"] "." ["c"]]))
+  (["JUXT" "+" "a" ["JUXT" "." "b" "c"]] (runic [["a"] "+" ["b"] "." ["c"]]))
+  (["JUXT" "+" ["JUXT" "." "a" "b"]]     (runic ["+" ["a"] "." ["b"]])))
+
+
+;;; Tight sequence splitting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Input elements:
+;;;   rune-string (IsNat)  — ERune
+;;;   (0 sym-string)       — ESym   (sym-string IsNat, i.e. a symbol)
+;;;   (0 form)             — EForm  (form is a list)
+;;;
+;;; Gap rules:
+;;;   Never after ERune or ESym.
+;;;   After EForm: gap unless followed by ERune with a continuation.
+
+; rune-elem? : Elem -> Bool
+(define (rune-elem? e)   (IsNat e))
+; sym-elem? : Elem -> Str | 0   (returns sym-string if ESym, 0 otherwise)
+(define (sym-elem? e[s]) (And (IsApp e) (And (IsNat s) s)))
+
+; gap? : Elem -> List Elem -> Bool
+(define (gap? e rest[next next-rest])
+  (cond
+    ((rune-elem? e)      0)                     ; rune
+    ((rune-elem? next)   (Nil next-rest))       ; (x rune) vs (x rune y ...)
+    (else                (not (sym-elem? e))))) ; foo(bar) vs (bar)foo
+
+; arrayRev : List a -> Array a
+(define (arrayRev xs)
+  (Row 0 (llen xs) (lrev xs)))
+
+; split-tight : List Elem -> Array (Array Elem)
+(define (split-tight elems)
+  (define (go elems[e rest] acc)
+    (cond
+      ((Nil elems)   (And acc (lsing (arrayRev acc))))
+      ((gap? e rest) (lcons (arrayRev (lcons e acc)) (go rest 0)))
+      (else          (go rest (lcons e acc)))))
+  (array (go elems 0)))
+
+(define (x row) (split-tight (stream row)))
+(define F 0)
+
+(tests
+  ([[F"foo"]]                    x[F"foo"])                   ; foo
+  ([[F["foo"]] [F["bar"]]]       x[F["foo"] F["bar"]])        ; (foo)(bar)
+  ([[F"a" "." F"b"]]             x[F"a" "." F"b"])            ; a.b
+  ([[F"a" "." F"b"] [","]]       x[F"a" "." F"b" ","])        ; a.b,
+  ([[F["a"]] [F["z"] "." F(3)]]  x[F["a"] F["z"] "." F(3)])) ; (a)(z).3
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; TODO: support patterns like this: tok(l c tt s)
+
+; parseTight : (List LocTok -> [Sexp, List LocTok]) -> List LocTok -> [List Elem, List LocTok]
+(define (parseTight parseList ts)
+  (define (loop ts[tok[c tt s] rest] acc)
+    (define l   (Hd tok))
+    (define end [(lrev acc) ts])
+    (cond
+      ((Nil ts)          end)
+      ((Eq tt TT_CLOSE)  end)
+      ((Eq tt TT_SPACE)  end)
+      ((Eq tt TT_ERROR)  (Throw (0 "LexError" l c s)))
+      ((Eq tt TT_RUNE)   (loop rest [(limplode s) acc]))
+      ((Eq tt TT_SYMBOL) (If (lall isDigit s)
+                           (loop rest (lcons 0(1 (loadNum 0 s)) acc))
+                           (loop rest (lcons 0(limplode s) acc))))
+      ((Eq tt TT_STRING) (let ((v (limplode (ltakeWhile (Ne dquote) (Ix1 s)))))
+                           (loop rest (lcons 0(1 v) acc))))
+      (else              (let* ((cb       (Ix0 s)) ; TT_OPEN
+                                (_r[x ts] (parseList ts)))
+                           (loop ts (lcons (0 x) acc))))))
+  (loop ts 0))
+
+; matching-closer : Str -> Str
+(define (matching-closer open-char)
+  (cond ((Eq open-char "(") ")")
+        ((Eq open-char "[") "]")
+        (else               "}")))
+
+; list-prefix : Str -> Sexp
+(define (list-prefix open-char)
+  (cond ((Eq open-char "(") 0)
+        ((Eq open-char "[") (0 "BRAK"))
+        (else               (0 "CURL"))))
+
+; parseList : List LocTok -> [Sexp, List LocTok]
+(define (parseList @[@1[_ _ @2[opener]] contents])
+  (define closer (matching-closer opener))
+  (define prefix (list-prefix opener))
+  (define (loop acc ts[tok[c tt s[cb]] rest])
+    (define l (Hd tok))
+    (cond
+      ((Nil ts)         (Throw (0 "UnexpectedEOF" l c)))
+      ((Eq tt TT_SPACE) (loop acc rest))
+      ((Eq tt TT_CLOSE) (If (Eq cb closer)
+                          [acc rest]
+                          (Throw (0 "MismatchedClose" l c cb closer))))
+      (else             (let* ((@[es ts] (parseTight parseList ts))
+                               (acc (Weld acc
+                                      (map runic (split-tight es)))))
+                          (loop acc ts)))))
+  (loop prefix contents))
+
+(define (x str)
+  (Ix0 (parseList (locToks (locate 1 1 (tokenize (lexplode str)))))))
+
+(tests (0                              x"()"))
+(tests (["foo"]                        x"(foo)"))
+(tests (["foo" "bar"]                  x"(foo bar)"))
+(tests (["foo" ["bar" "zaz"]]          x"(foo (bar zaz))"))
+(tests (["foo" ["JUXT" "." "a" "b"]]   x"(foo a.b)"))
+(tests ([["foo"] ["bar"]]              x"((foo)(bar))"))
+(tests (["BRAK" ["foo"] ["bar"]]       x"[(foo)(bar)]"))
+(tests ([["JUXT" "." ["foo"] "x"]]     x"((foo).x)"))
+
+
+;;; Parser ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Receives a list of located tokens (l c tt s), returns an s-expression.
+;;;
+;;; parseNext is the single recursive entry point.  All helpers are nested
+;;; inside it so they can call parseNext without mutual recursion at top level.
+
+; parse : List LocTok -> Sexp
+(define (parse ts[tok rest])
+  (define @[elems ts'] (parseTight parseList ts))
+  (define groups       (split-tight elems))
+  (cond
+    ((Nil ts)                (Throw (0 "UnexpectedEOF" 0 0)))
+    ((Eq TT_SPACE (Ix1 tok)) (parse rest))
+    ((Eq 1 (Sz groups))      (runic (Ix0 groups)))
+    (else                    (Throw (0 "ScannerError" groups)))))
+
+
+;;; Integration tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; parseStr : Str -> Sexp
+(define (parseStr str)
+  (define _r[_ _ ts] (locate 1 1 (tokenize (lexplode str))))
+  (parse ts))
+
+; roundtrip : Str -> Str
+(define (roundtrip str)
+  (define exp (parseStr str))
+  (define out (prettyWexp 60 exp))
+  (Trace ("roundtrip" str exp "->" out) out))
+
+; roundtripW : Nat -> Str -> Str
+(define (roundtripW wid str)
+  (prettyWexp wid (parseStr str)))
+
+(tests
+  ; Flat forms round-trip cleanly.
+  ("foo"       (roundtrip "foo"))
+  ("42"        (roundtrip "42"))
+  ("(f x y)"   (roundtrip "(f x y)"))
+  ("[a b c]"   (roundtrip "[a b c]"))
+  ("{a b c}"   (roundtrip "{a b c}"))
+  ("f(a b)"    (roundtrip "f(a b)"))
+  ("'foo"      (roundtrip "'foo")))
+
+(tests
+  ("(#define value zero 0)" (roundtrip "(#define value zero 0)")))
+
+(tests
+  ; Nested forms round-trip cleanly.
+  ("(f (g x) y)"      (roundtrip "(f (g x) y)"))
+  ("(f (g (h x)) y)"  (roundtrip "(f (g (h x)) y)"))
+  ("[a [b c] d]"      (roundtrip "[a [b c] d]"))
+  ("{f [a b] {c d}}"  (roundtrip "{f [a b] {c d}}")))
+
+(tests
+  ; Juxt with various argument shapes.
+  ("f(a b c)"  (roundtrip "f(a b c)"))
+  ("f[a b c]"  (roundtrip "f[a b c]"))
+  ("f{a b}"    (roundtrip "f{a b}"))
+  ("f(g(x))"   (roundtrip "f(g(x))")))
+
+; Multiline expected outputs.
+(define wideForm
+  "(define (fib n) (if (le n 1) n (add (fib (sub n 1)) (fib (sub n 2)))))")
+
+(define wideFormBroken
+  "(define (fib n)
+ (if (le n 1) n
+  (add
+   (fib (sub n 1))
+   (fib (sub n 2)))))")
+
+(tests
+  (wideForm       (roundtripW 80 wideForm))
+  (wideFormBroken (roundtripW 20 wideForm)))
+
+(define deepForm "(a (b (c (d (e x)))))")
+
+(define deepFormBroken
+  "(a
+ (b
+  (c
+   (d (e x)))))")
+
+(tests
+  (deepForm       (roundtripW 60 deepForm))
+  (deepFormBroken (roundtripW 10 deepForm)))
+
+
+;;; Output ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define barNewline (Add 256 newline))
+
+(define (putStrLn str)
+  (Output (Add str (Lsh barNewline (Mul 8 (Bytes str))))))
+
+
+;;; Top-level pipeline ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; isSpaceBlock : List LocTok -> Bool
+(define (isSpaceBlock ts)
+  (And (Nil (IsNat ts))
+    (And (Ifz (Ix1 ts) 1 0)
+      (Eq TT_SPACE (Ix1 (Ix0 ts))))))
+
+; proc1 : Bool -> List LocTok -> Sexp | 0
+(define (proc1 interactive ts)
+  (If (isSpaceBlock ts) NIL
+    (let1 r[v] (Try parse ts)
+      (Ifz (Hd r) v
+        (If interactive
+          (begin (putStrLn (lstrcat ~["Read error: " (prettyWexp 60 v)]))
+                 NIL)
+          (Throw v))))))
+
+; readAll : Bool -> List Byte -> List [Nat, Nat, Sexp]
+(define (readAll interactive cs)
+  (define (go l c forms[form rest])
+    (Ifz forms NIL
+      (begin
+        (define _r[l' c' ts]     (locate l c form))
+        (define result           (proc1 interactive ts))
+        (define tail             (go l' c' rest))
+        (Ifz result tail [[l c result] tail]))))
+  (go 1 1 (scan (tokenize cs))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#export readAll)

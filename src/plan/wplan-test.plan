@@ -1,0 +1,19 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@stdlib
+
+(#bind Print
+  (#pin
+    (#law "Print" (Print x)
+      ((#pin "R") ("Print" x)))))
+
+(patfun (main-step _ arg)
+  (Seq (Print arg) (Print 10)))
+
+(patfun (main args)
+  (Trace ("main" Print args)
+    (foldl main-step 0 args)))
+
+"loaded wplan-test.wisp"

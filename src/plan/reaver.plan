@@ -1,0 +1,582 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+@bst
+@global
+@read
+
+;;;; The Reaver compiler: from Wisp S-expressions to de Bruijn indexed LExpr.
+;;;;
+;;;; Single pass: resolves names, expands macros, and emits LExpr directly.
+;;;; No intermediate keyed representation, no unique key supply, no separate
+;;;; indexing pass.
+;;;;
+;;;; Locals is a BST mapping name -> binding depth, separate from the
+;;;; global env.  Bindings are recorded at depth+1 (the position they
+;;;; occupy on the stack).  When a name resolves to a local, the de
+;;;; Bruijn index is simply:
+;;;;
+;;;;   index = currentDepth - bindingDepth
+;;;;
+;;;; Resolution checks locals first, then globals.  push-gate merges
+;;;; captured globals and locals from a syntactic closure into the
+;;;; call-site environment.
+;;;;
+;;;; Code style: Wisp-compatible.
+;;;;   - No forward references.
+;;;;   - Mutual recursion broken by passing function references.
+;;;;   - Each function has one binding site (explicit case).
+;;;;   - Cases are shallow.
+;;;;   - `let` only at the very top of a function body.
+;;;;
+;;;; Locals is a BST mapping names to one of three kinds of entry:
+;;;;
+;;;;   Positive nat   — a runtime binding at that de Bruijn depth.
+;;;;                    Index = currentDepth - bindingDepth.
+;;;;
+;;;;   0              — a "poison" entry.  Marks a runtime local that is
+;;;;                    visible in the source scope of a #letmacro, but
+;;;;                    cannot be referenced by transformer expressions
+;;;;                    because transformers run at compile time, before
+;;;;                    any runtime values exist.  Referencing a poisoned
+;;;;                    name is a compile-time error.
+;;;;
+;;;;   Any other val  — a local macro transformer.  The value is a
+;;;;                    function with the standard macro ABI:
+;;;;                        (transformer ctx uniq glo locals depth form) -> [uniq glo form]
+;;;;                    It is called directly by reaver-apply when the head
+;;;;                    of a form resolves to it.  It can also be used as
+;;;;                    a plain value (e.g. for debugging/printing).
+;;;;
+;;;; #letmacro compiles its transformer expressions in parallel:
+;;;;
+;;;;   1. Poison locals: replace all nat depths with 0, preserving any
+;;;;      existing transformer entries.  This prevents transformer exprs
+;;;;      from accidentally referencing runtime locals.
+;;;;
+;;;;   2. Compile each transformer expr at depth=0 with the poisoned
+;;;;      locals, threading uniq and glo left-to-right.  Transformers
+;;;;      do not see each other (parallel, not recursive).
+;;;;
+;;;;   3. Immediately eval each compiled expr to obtain the transformer
+;;;;      function value.
+;;;;
+;;;;   4. Insert all [name -> transformer] pairs into locals at once.
+;;;;
+;;;;   5. Compile the body with the extended locals and the original depth.
+;;;;      No runtime node is emitted for the macro bindings themselves —
+;;;;      they are purely syntactic and have no runtime presence.
+
+;;;; `#letmacro` is the primitive binding form for local macros. It compiles
+;;;; transformer expressions in parallel at depth 0 with runtime locals
+;;;; poisoned, evaluates each immediately, and binds the resulting transformer
+;;;; functions into the locals table for the duration of the body. The body
+;;;; is compiled at the original depth with no runtime nodes emitted for
+;;;; the macro bindings themselves. `let-syntax` is simply `#letmacro` —
+;;;; there is no meaningful distinction, since transformer expressions cannot
+;;;; reference runtime locals anyway. `letrec-syntax` could be implemented
+;;;; as a user-level macro on top of `#letmacro` using `syntax-rules`, since
+;;;; mutual recursion between transformers can be expressed by having each
+;;;; transformer look the others up by name at expansion time rather than at
+;;;; definition time.
+
+;;;; `syntax-rules` is a macro that runs at its definition site and returns
+;;;; a compiled transformer as a constant. When `syntax-rules` expands,
+;;;; it has access to the definition-site `glo` and `locals`. It walks the
+;;;; template and replaces every symbol that is not a pattern variable with
+;;;; its definition-site resolution — a runtime value becomes `(1 val)`,
+;;;; a transformer becomes `(2 transformer)`. Introduced binding names in
+;;;; the template are replaced with gensyms drawn from `uniq`. The result is
+;;;; a transformer function wrapped in `(1 ...)`, so the reaver embeds it as
+;;;; a constant at the definition site.
+
+;;;; When that transformer is later invoked at an expansion site, it
+;;;; receives the call-site `uniq`, `glo`, `locals`, `depth`, and `form`. It
+;;;; pattern-matches the input form, substitutes the matched subforms into the
+;;;; pre-compiled template for the matching rule, and returns the resulting
+;;;; form for the reaver to compile in the call-site environment. The call-site
+;;;; environment only ever sees the substituted subforms from the input — all
+;;;; other references in the template were resolved at definition time and are
+;;;; already constants. Hygiene is therefore not a mechanism to be enforced
+;;;; but a structural consequence of when compilation happens. There is no
+;;;; renaming, no mark-and-substitute, no free-name tracking. Definition-site
+;;;; names are resolved at definition time; call-site subforms are compiled
+;;;; at call time.
+
+
+;;; Bytes helpers (TODO: separate module) ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define barNewline (Add 256 newline))
+
+(define (putStrLn str)
+  (Output (Add str (Lsh barNewline (Mul 8 (Bytes str))))))
+
+(define (bytes-size bytes)
+  (Dec (Bytes bytes)))
+
+(define (bytes-is-empty? bytes)
+  (Le bytes 1))
+
+(define (explode-bytes block)
+  (define sz (bytes-size block))
+  (define (go i)
+    (And (Lt i sz)
+      (begin
+        (define byte (Load8 i block))
+        byte
+        [byte (go (Inc i))])))
+  (go 0))
+
+(tests
+  ( ~["a" "b" "c"] (explode-bytes "abc#"))
+  ( ~[]            (explode-bytes "#"))
+  ( ~[]            (explode-bytes "")))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define EMPTY-CACHE 0)
+(define INITIAL-UNIQUE 1)
+
+;-- ============================================================================
+;-- Read Helpers
+;-- ============================================================================
+
+(define (parse-flag s[n])
+  (If (And (Eq 1 (Hd s))
+        (And (IsNat n)
+          (Le n 1)))
+    n
+    Error("bad-flag" s)))
+
+(define (parse-nat s[n])
+  (If (And (Eq 1 (Hd s))
+        (IsNat n))
+    n
+    Error("bad-nat" s)))
+
+(define (parse-name construct s)
+  (If (And (IsNat s) s) s
+    Error("bad-name" construct s)))
+
+(define (check-uniq names i nm)
+  (If (Or (Nil nm) (Eq "_" nm)) 0
+    (If (Eq i (lsearch nm names)) nm
+      Error("duplicate" nm))))
+
+(tests
+  ("x"                  (check-uniq ["x" "y"] 0 "x"))
+  (0                    (check-uniq ["_" "y"] 0 "_"))
+  (0                    (check-uniq ["" "y"]  0 ""))
+  (0                    (check-uniq ["_" "_"] 1 "_"))
+  (["x"]                (Try (check-uniq ["x" "x"] 0) "x"))
+  ((1("duplicate" "x")) (Try (check-uniq ["x" "x"] 1) "x")))
+
+(define (assert-size n vec)
+  (Or (Eq n (Sz vec))
+    Error("form-size" ("expecting" n) vec)))
+
+(tests
+  (1 (assert-size 3 ["#let" [] "body"]))
+  ((1 ("form-size" ("expecting" 3) ["#let" 0 0 "body"]))
+   (Try (assert-size 3) ["#let" [] [] "body"])))
+
+
+;;; Loading Files ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; valid-module-char? checks if a character matches /[0-9A-Za-z_-]/
+
+(define (valid-module-char? c)
+  (or (And (Le "A" c) (Le c "Z"))
+      (And (Le "a" c) (Le c "z"))
+      (And (Le "0" c) (Le c "9"))
+      (Eq "_" c)
+      (Eq "-" c)))
+
+; =valid-module-name?= returns true if the input is a string which satisfies
+; /[0-9A-Za-z_-]+/.
+
+(define (valid-module-name? str)
+  (And (Nat str)
+    (lall valid-module-char? (lexplode str))))
+
+(define (parse-module-name nm)
+  (If (valid-module-name? nm) nm
+    (Error ("#module" "bad-module" nm))))
+
+(define (file-loop go mod cache ctx uniq glo forms[@[l c x] more])
+  mod cache uniq glo x
+  (Ifz forms [cache glo]
+    (begin
+      (define ctx (mod l c x))
+      (define locals 0)
+      (define depth 0)
+      (define @[cache uniq glo val] (go cache ctx uniq glo locals depth x))
+      (print val)
+      (file-loop go mod cache ctx uniq glo more))))
+
+(define EMPTY-ENVIRONMENT 0)
+
+; TODO: implement strCat
+
+(define (reaver-module go cache ctx uniq glo locals depth x[_ moduleS])
+  (assert-size 2 x)
+  (define module             (parse-module-name moduleS))
+  (define filenm             (strWeld "reaver/" (strWeld module ".rvr")))
+  (define stamp              (Stamp filenm))
+  (define ent[eStamp eValue] (bst-idx module cache))
+  (If (And ent (Eq eStamp stamp))
+    (begin
+      (print ("CACHED" module ent eStamp stamp))
+      [cache uniq glo (K eValue)])
+    (begin
+      (print ("LOADING" module))
+      (define @[cache value]
+        (file-loop go module cache ctx INITIAL-UNIQUE EMPTY-ENVIRONMENT
+          (readAll 0 (explode-bytes (ReadFile filenm)))))
+      (define cache (bst-insert module [stamp value] cache))
+      [cache uniq glo (K value)])))
+
+(define (read-identifier name)
+  (Ifz (Nat name)
+    Error("read-identifier" "invalid" name)
+    name))
+
+; (#export sym*) -- restrict namespace to subset
+
+(define (reaver-export go cache ctx uniq glo locals depth x)
+  (define names (Force (map read-identifier (drop 1 x))))
+  names
+  (define glo (gexport names glo))
+  glo
+  [cache uniq glo (K glo)])
+
+; (#import module a b c d e) -- imports a specified set.
+; (#import module) -- imports everything.
+
+(define (reaver-import go cache ctx uniq glo locals depth x[_ moduleS])
+  (define params (Sz x))
+  (define modnm  (parse-module-name moduleS))
+  (define names  (Force (map read-identifier (drop 2 x))))
+  (define module (glookup modnm glo))
+  (define source (.entry-val (Unpin module)))
+  (If (Lt params 2)
+    Error("import" "no-module")
+    (begin modnm names
+      (cond
+        ((Nil module) Error("#import" "unbound" modnm))
+        ((Eq 2 params)
+          (let1 glo (gimport-all source glo)
+            glo [cache uniq glo (K glo)]))
+        (else
+          (let1 glo (gimport names source glo)
+            glo [cache uniq glo (K glo)]))))))
+
+
+;;; Bindings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; =bind-group= insert names as locals into locals at sequential depths,
+;; and throws an error if the group contains repeated names.
+;;
+;; underscores are mapped to the empty symbol so that they connot be
+;; referenced, and duplicates are tolerated.
+
+(define (bind-group-step names depth i acc nm)
+  (define d   (Inc (Add depth i)))
+  (define nm* (check-uniq names i nm))
+  (Seq d
+    (Ifz nm* acc (bst-insert nm* d acc))))
+
+(define (bind-group locals depth syms)
+  [(ifoldl (bind-group-step syms depth) locals syms)
+   (Add depth (Sz syms))])
+
+(tests
+  ([0 1]               (bind-group 0 1 []))
+
+  ([(bst-sing 1 3) 1]  (bind-group (bst-sing 1 3) 1 []))
+
+  ([(bst-sing "a" 2) 2] (bind-group 0 1 ["a"]))
+
+  ((1 ("duplicate" "a")) (Try (bind-group 0 1) ["a" "a"]))
+
+  ([(bst-insert "b" 3 (bst-sing "a" 2)) 3]
+   (bind-group 0 1 ["a" "b"])))
+
+(define (reaver-siblings finalize go cache ctx uniq glo locals depth forms)
+  (define (loop acc cache glo uniq lis[f fs])
+    acc cache glo uniq
+    (Ifz lis [cache uniq glo (finalize acc)]
+      (let1 @[cache uniq glo x] (go cache ctx uniq glo locals depth f)
+        (loop (acc x) cache glo uniq fs))))
+  (loop 0 cache glo uniq (stream forms)))
+
+(define (reaver-parse-binds go cache ctx uniq glo locals depth forms)
+  (define (loop acc cache glo uniq i lis[f fs])
+    acc cache glo uniq i
+    (Ifz lis [cache uniq glo acc]
+      (let1 @[cache uniq glo x] (go cache ctx uniq glo locals (Add depth i) f)
+        (loop (acc x) cache glo uniq (Inc i) fs))))
+  (loop 0 cache glo uniq 0 (stream forms)))
+
+(define (reaver-inline go cache ctx uniq glo locals depth forms[_ expr])
+  (define @[cache uniq glo x] (go cache ctx uniq glo locals depth expr))
+  (assert-size 2 forms)
+  [cache uniq glo (M x)])
+
+(define (reaver-fun go cache ctx uniq glo locals depth forms[_ pinS markS tagS sigS[selfS] bodyS])
+  (define argsS   (drop 1 sigS))
+  (define pinned  (parsePinnedFlag pinS))
+  (define inlined (parseInlineFlag markS))
+  (define tag     (parse-nat tagS))
+  (define self    (parse-name "#fun.self" selfS))
+  (define arity   (Sz argsS))
+  (define @[locs1 selfDepth] (bind-group locals depth [self]))
+  (define @[locs2 bodyDepth] (bind-group locs1 selfDepth (map (parse-name "#fun.arg") argsS)))
+  (define @[cache uniq glo body] (go cache ctx uniq glo locs2 bodyDepth bodyS))
+  (assert-size 6 forms)
+  [cache uniq glo (F pinned inlined (has-ref arity body) tag arity body)])
+
+(define (has-shape hd sz x)
+  (define h (Hd x))
+  (And (IsNat h)
+   (And (Eq hd h)
+     (Eq sz (Sz x)))))
+
+(define (parse-bind bind)
+  (If (has-shape 0 2 bind) bind
+    Error("bad-bind" bind)))
+
+(define (sexp-is-expr s)
+  (Nil (Hd s)))
+
+(define (parse-binds binds)
+  (Ifz (sexp-is-expr binds)
+    Error("bad #let binds: " binds)
+    unzip(map parse-bind binds)))
+
+(define (reaver-let go cache ctx uniq glo locals depth forms[_ bindsS bodyS])
+  (define @[nameSs valSs]        (parse-binds bindsS))
+  (define @[locs2 d2]            (bind-group locals depth (map (parse-name "#let") nameSs)))
+  (define @[cache uniq glo vals] (reaver-parse-binds go cache ctx uniq glo locals depth valSs))
+  (define @[cache uniq glo body] (go cache ctx uniq glo locs2 d2 bodyS))
+  (assert-size 3 forms)
+  [cache uniq glo (foldr L body vals)])
+
+;; Note that the reverse on the =bind-group= is to get the indexes in
+;; the right order for the letrec.  The first binding is the furthest
+;; away from the body, so it has the highest index, etc.
+
+(define (reaver-letrec go cache ctx uniq glo locals depth forms[_ bindsS bodyS])
+  (define @[nameSs valSs]        (parse-binds bindsS))
+  (define @[locs2 d2]            (bind-group locals depth
+                                   (rev (map (parse-name "#letrec") nameSs))))
+  (define @[cache uniq glo vals] (reaver-siblings id go cache ctx uniq glo locs2 d2 valSs))
+  (define @[cache uniq glo body] (go cache ctx uniq glo locs2 d2 bodyS))
+  (assert-size 3 forms)
+  [cache uniq glo (Ifz vals body (R vals body))])
+
+(defval e0 0)
+(defval e1 (bst-sing "x" 4))
+(defval e2 (bst-insert "a" 5 (bst-sing "b" 4)))
+
+;; reaver-expand handles forms like (2 macro-fn arg...)
+;;
+;; (2 macro-fn a b c) is expanded by calling `macro-fn` with the full
+;; expression.  Note that the form will still be in the right shape for
+;; the usual pattern matching.  These have the same structure and size:
+;;
+;;     (0 "let"  a b c)
+;;     (2 let-fn a b c)
+
+(define (reaver-expand go cache ctx uniq glo locals depth form[macro])
+  (define @[uniq glo form] (macro ctx uniq glo locals depth form))
+  (go cache ctx uniq glo locals depth form))
+
+(define (gent-is-macro? pent)
+  (.entry-macro (Unpin pent)))
+
+(define (reaver-apply go cache ctx uniq glo locals depth form[hd])
+  (define lent[loc]  (bst-search hd locals))
+  (define gent       (glookup hd glo))
+
+  (define call-case
+    (reaver-siblings apple go cache ctx uniq glo locals depth form))
+
+  (define local-macro-case
+    (let1 @[uniq glo form] (loc ctx uniq glo locals depth form)
+      (go cache ctx uniq glo locals depth form)))
+
+  (define global-macro-case
+    (let1 @[uniq glo form] (.entry-val (Unpin gent) ctx uniq glo locals depth form)
+      (go cache ctx uniq glo locals depth form)))
+
+  (cond
+    ((not (IsNat hd))      call-case)                ; compound head
+    (lent                  (If (IsNat loc) call-case ; local or poison
+                             local-macro-case))      ; local macro
+    ((gent-is-macro? gent) global-macro-case)        ; global macro
+    (else                  call-case)))              ; non-macro / unbound
+
+(define (reaver-symbol cache uniq glo locals depth form)
+  (define lent[loc] (bst-search form locals))
+  (define gent      (glookup form glo))
+  (cond
+    ((Nat loc)    [cache uniq glo (V (Sub depth loc))])       ; local (positive nat)
+    (loc          [cache uniq glo (K loc)])                   ; ref local macro
+    (lent         Error("dynamic-local-in-macro" form))       ; poison (loc=0)
+    (gent         [cache uniq glo (G gent)])                  ; global
+    (else         Error("unbound" form))))                    ; unbound
+
+(define (globals-table? ent)
+  (IsPin ent)) ; TODO: check more specific features of the shape to see
+               ; if it looks like a global env.
+
+(define (reaver-in go cache ctx uniq glo locals depth x)
+  (define (loop ctx names[n ns])
+    (define ent (glookup n ctx))
+    (cond
+      ((Nil names) (K ctx))
+      ((not (globals-table? ctx)) Error("#in" "not-an-environment" n x))
+      ((Nil ns) (G ent))
+      (else     (loop (.entry-val (Unpin ent)) ns))))
+  (define names (Force (lmap read-identifier (ldrop 1 (stream x)))))
+  (define expr (loop glo names))
+  names expr [cache uniq glo expr])
+
+(define (reaver-insert go cache ctx uniq glo locals depth is-macro nmS xS)
+  (define nm                  (read-identifier nmS))
+  (define @[cache uniq glo x] (go cache ctx uniq glo locals depth xS))
+  (define v                   (eval-expr x))
+  (define glo                 (ginsert (Pin [nm v is-macro x 0]) glo))
+  is-macro nm x v glo
+  [cache uniq glo (1 v)])
+
+(define (reaver-bind go cache ctx uniq glo locals depth form[_ nmS xS])
+  (And depth           Error("#bind can only be used at the top-level"))
+  (Or (Eq 3 (Sz form)) Error("#bind" "invalid" form))
+  (reaver-insert go cache ctx uniq glo locals depth 0 nmS xS))
+
+(define (reaver-macro go cache ctx uniq glo locals depth form[_ nmS xS])
+  (And depth           Error("#macro can only be used at the top-level"))
+  (Or (Eq 3 (Sz form)) Error("#macro" "invalid" form))
+  (reaver-insert go cache ctx uniq glo locals depth 1 nmS xS))
+
+
+;;; #letmacro ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (poison-locals locals)
+  (bst-map (lambda (v) (If (IsNat v) 0 v)) locals))
+
+(define (reaver-letmacro go cache ctx uniq glo locals depth forms[_ bindsS bodyS])
+  (define @[nameSs valSs] (parse-binds bindsS))
+  (define names           (map (parse-name "#letmacro") nameSs))
+  (define poisoned        (poison-locals locals))
+
+  (define (compile1 @1[acc uniq cache glo] @2[nm valS])
+    (define @[cache uniq glo x] (go cache ctx uniq glo poisoned 0 valS))
+    [(acc [nm (eval-expr x)]) uniq cache glo])
+
+  (define @[pairs uniq cache glo]
+    (foldl compile1 [0 uniq cache glo] (zip names valSs)))
+
+  (define locals
+    (lfoldl {locals @[nm t] -> (bst-insert nm t locals)} locals (stream pairs)))
+
+  (define @[cache uniq glo body]
+    (go cache ctx uniq glo locals depth bodyS))
+
+  (assert-size 3 forms)
+  [cache uniq glo body])
+
+
+;;; #pin ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (reaver-pin go cache ctx uniq glo locals depth forms[_ xS])
+  (assert-size 2 forms)
+  (define @[cache uniq glo x] (go cache ctx uniq glo 0 0 xS))
+  (define val (Pin (eval-expr x)))
+  val [cache uniq glo (K val)])
+
+
+;;; #const ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (reaver-const go cache ctx uniq glo locals depth form[_ xS])
+  (define (finalize xs) (Sap K (eval-expr (apple xs))))
+  (reaver-siblings finalize go cache ctx uniq glo 0 0 (drop 1 form)))
+
+
+;;; Reaver ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (reaver-form cache ctx uniq glo locals depth form[a])
+  uniq
+  (define (keyword-case sym)
+    (Case14 (lsearch sym ["#fun" "#let" "#letrec" "#letmacro" "#inline"
+                          "#pin" "#const"
+                          "#bind" "#macro" "#module" "#in" "#import" "#export"])
+        reaver-fun reaver-let reaver-letrec reaver-letmacro reaver-inline
+        reaver-pin reaver-const
+        reaver-bind reaver-macro reaver-module reaver-in
+        reaver-import reaver-export
+        reaver-apply))
+  (cond
+    ((Nil form)       [cache uniq glo (K 0)])
+    ((IsNat form)     (reaver-symbol cache uniq glo locals depth form))
+    ((Eq 1 (Hd form)) [cache uniq glo (K a)])
+    ((Eq 2 (Hd form)) (reaver-expand reaver-form cache ctx uniq glo locals depth form))
+    ((Hd form)        (Error ("reaver-bad-sexp" form)))
+    (else
+      (keyword-case a reaver-form cache ctx uniq glo locals depth form))))
+
+(define (reaver cache ctx uniq glo form)
+  (reaver-form cache ctx uniq glo 0 0 form))
+
+(define (reval cache ctx uniq glo form)
+  (define @[cache uniq glo x] (reaver cache ctx uniq glo form))
+  [cache uniq glo (eval-expr x) x])
+
+
+;;; Main ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (read-stdin block-size)
+  (define bytes (Input block-size))
+  (And (not (bytes-is-empty? bytes))
+    (lweld (explode-bytes bytes)
+      (read-stdin block-size))))
+
+(define (file-loop fil cache uniq glo forms[@[l c form] more])
+  glo
+  (Ifz forms [cache uniq glo]
+    (begin
+      (define @[cache uniq glo val]
+        (reval cache (fil l c form) uniq glo form))
+      (file-loop fil cache uniq glo more))))
+
+(define (main-file cache uniq glo filename)
+  (file-loop filename cache uniq glo
+    (readAll 0 (explode-bytes (ReadFile filename)))))
+
+(define (repl-main cache uniq glo args[filename])
+  (define (repl cache uniq glo results[@[l c form] rest])
+    (Save (Pin (repl-main cache uniq glo)))
+    (And results
+      (begin
+        (define _r[cache uniq glo val]
+          (reval cache ("stdin" l c form) uniq glo form))
+        (print val)
+        (repl cache uniq glo rest))))
+
+  (define res[cache uniq glo]
+    (Ifz args [cache uniq glo] (Try (main-file cache uniq glo) filename)))
+
+  (If (Hd res) (print ("ERROR" res))
+    (putStrLn "FILE OKAY"))
+
+  (repl cache uniq glo (readAll 1 (read-stdin 65536))))
+
+(define (main args)
+  (Save (Pin (repl-main EMPTY-CACHE
+                        INITIAL-UNIQUE
+                        EMPTY-ENVIRONMENT))))

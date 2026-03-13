@@ -1,0 +1,648 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+
+;;;; This implements a reader, a printer, and an extensible REPL flow
+;;;; for wisp-expressions.  Just provide a step function, and you get
+;;;; a REPL.
+;;;;
+;;;; A Wisp expression is the following Haskell datatype:
+;;;;
+;;;;     data Expr
+;;;;         = NAME Natural -- A symbol (reference)
+;;;;         | ATOM Plan    -- Any plan value (number, or other value)
+;;;;         | EXPR [Expr]  -- A expression (function application)
+;;;;
+;;;; This AST is encoded into PLAN like so:
+;;;;
+;;;;     NAME n  -> n
+;;;;     EXPR xs -> (0 xs..)
+;;;;     ATOM v  -> (1 v)
+;;;;
+;;;; Here is the base syntax:
+;;;;
+;;;;     EXPR xs  = (xs..)
+;;;;     ATOM 88  = X
+;;;;     QUOT 88  = 88 | "X"
+;;;;
+;;;; Here is all of the syntactic sugar:
+;;;;
+;;;;     [..]  = (BRAK ..)
+;;;;     {..}  = (CURL ..)
+;;;;     x(..) = (JUXT x (..))
+;;;;     x[..] = (JUXT x [..])
+;;;;     x{..} = (JUXT x {..})
+;;;;     x".." = (JUXT x "..")
+
+;;; Reader ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (loadNum acc list[c cs])
+  (Seq acc
+    (Ifz list acc
+      (loadNum (Add (Mul 10 acc) (Sub c "0")) cs))))
+
+(tests
+  (12 (loadNum 0 ~["0" "1" "2"])))
+
+(define (symbol _ cs k)
+  (let* ((scs (ltakeWhile isSymChr cs))
+         (exp (Ifz (lall isNatChr scs)
+                (limplode scs)
+                (Sap 1 (loadNum 0 scs)))))
+    (Sap2 k exp (ldropWhile isSymChr cs))))
+
+(tests
+  ( (limplode (lexplode "abcd"))   "abcd"         ))
+
+(tests
+  ( (loadNum 0 ["1" ["2" ["3"]]])  123            )
+  ( (symbol 0 ["a" ["b" ["("]]] 0) ["ab" ["("]]   )
+  ( (symbol 0 ["1" ["2" ["("]]] 0) [(1 12) ["("]] ))
+
+(define (juxt prefix read s0 k)
+  (prefix read s0 {item s1[c] ->
+    (Ifz (Test c opnChr) (k item s1)
+      (read s1 {x s2 ->
+        (k (0 "JUXT" item x) s2)}))}))
+
+(tests
+  ((juxt symbol "read" ["1" ["2" [" " ["("]]]] 0)
+   [(1 12) [" " ["("]]]))
+
+(define (unexpected _read cs[c] k)
+  (Error ("unexpected" c)))
+
+(define (ignore read stream k)
+  (let ((cs (Ix1 stream)))
+   (read cs k)))
+
+(define (skipComment list)
+  (ldropWhile (Ne newline) list))
+
+(define (skipSpace s[c cs])
+  (If (Eq ";" c)     (skipSpace (skipComment cs))
+    (If (isSpcChr c) (skipSpace cs)
+      s)))
+
+(def ex
+  (lexplode
+     "; hello
+    a"))
+
+(tests
+  (~["a"] (skipSpace ex))
+  (~["a"] (skipSpace ~[" " " " "a"])))
+
+(define (nestloop read mk end acc s0 k)
+  (let1 stream[c cs] (skipSpace s0)
+    (Seq acc
+      (If (Eq c end) (Sap2 k (mk acc) cs)
+        (read stream {item rest ->
+          (nestloop read mk end (acc item) rest k)})))))
+
+(define (nested read stream[c cs] k)
+  (If (Eq c "(") (nestloop read id              ")" 0 cs k)
+    (If (Eq c "[") (nestloop read (cons "BRAK") "]" 0 cs k)
+      (nestloop read (cons "CURL") "}" 0 cs k))))
+
+(define (expLoadStr cs)
+  (limplode (ltakeWhile (Ne dquote) cs)))
+
+(tests
+  ("hi" (expLoadStr ~["h" "i" dquote])))
+
+(define (string _ stream[c cs] k)
+  (let ((str (expLoadStr cs)))
+    (Sap2 k (Sap 1 str) (ldrop (Inc (Bytes str)) cs))))
+
+(define strExample
+  ~[dquote "hello" dquote "asdf"])
+
+(define strExample
+  (lexplode (lstrcat ~[dquote "hello" dquote "asdf"])))
+
+(tests
+  ((string "read" strExample 0)
+   (0 (1 "hello") (lexplode "asdf"))))
+
+(define expTable
+  (strGen 128 {c ->
+    (cond
+      ((Eq dquote c) 1)
+      ((Test c opnChr) 2)
+      ((isSymChr c) 3)
+      (else 0))}))
+
+(define (read cs0 k)
+  (let ((cs[c] (skipSpace cs0)))
+    (Ix (Load8 c expTable)
+      [unexpected string nested (juxt symbol)]
+      read cs k)))
+
+(define ex1 (lexplode "asdf #"))
+(define ex2 (lexplode "0123 #"))
+(define ex3 (lexplode (lstrcat ~[dquote "asdf" dquote " #"])))
+(define ex4 (lexplode "  (a b c) #"))
+(define ex5 (lexplode "foo(a b c) #"))
+(define ex6 (lexplode "{a b c} #"))
+(define ex7 (lexplode "[a b c] #"))
+(define end (lexplode " #"))
+
+(tests
+  ((0 "asdf"                       end) (read ex1 0))
+  ((0 (1 123)                      end) (read ex2 0))
+  ((0 (1 "asdf")                   end) (read ex3 0))
+  ((0 ["a" "b" "c"]                end) (read ex4 0))
+  ((0 ["JUXT" "foo" ["a" "b" "c"]] end) (read ex5 0))
+  ((0 ["CURL" "a" "b" "c"]         end) (read ex6 0))
+  ((0 ["BRAK" "a" "b" "c"]         end) (read ex7 0)))
+
+
+;;; Printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Print a wisp expression to a string.
+;;
+;; NAME n      -> n (a symbol, printed as-is)
+;; ATOM (1 v)  -> number or quoted string or *plan*
+;; EXPR (0 x..) -> parenthesized, with sugar for BRAK/CURL/JUXT
+
+;; Is this nat a printable string?  (non-zero, all bytes printable)
+(define (isString n)
+  (And (IsNat n)
+    (And (Gt (Bytes n) 1)
+      (strAll isPrint n))))
+
+;; Print a nat as a string or decimal number.
+(define (showNatVal n)
+  (If (isString n)
+    (lstrcat ~[dquote n dquote])
+    (showNat n)))
+
+;; Print a list of wisp exprs, space-separated.
+(define (showExprs go xs[hd tl])
+  (Ifz xs ""
+    (Ifz tl (go hd)
+      (lstrcat ~[(go hd) " " (showExprs go tl)]))))
+
+;; Stream elements from index i to end of row.
+(define (stream-from i x)
+  (And (Lt i (Sz x))
+    [(Ix i x) (stream-from (Inc i) x)]))
+
+;; Print the fields of an app as a space-separated list in brackets.
+;; [a b c]
+(define (showFields go x)
+  (lstrcat ~["[" (showExprs go (stream-from 0 x)) "]"]))
+
+(define (showName n)
+  (If (isString n) n
+    (showNat n)))
+
+(define (showPin go x)
+  (let ((item (Unpin x)))
+    (If (IsLaw item)
+      (lstrcat ~["<{" (showName (Name item)) "}>"])
+      (lstrcat ~["<" (go item) ">"]))))
+
+(define (showLaw go x)
+  (lstrcat ~["{" (go (Arity x)) " " (showName (Name x)) " " (go (Body x)) "}"]))
+
+(define (showApp go x)
+  (let ((hd (Hd x)))
+    (Ifz hd (showFields go x)
+      (strWeld (go hd) (showFields go x)))))
+
+;; Print a PLAN value.
+;;
+;; Nat:              string or decimal
+;; Pin of law:       <{name}>
+;; Pin of other:     <item>
+;; Law:              {arity name body}
+;; App with head 0:  [a b c]
+;; App with head h:  h[a b c]
+(define (showPlan go x)
+  (Case4 (Type x)
+    (showNatVal x)
+    (showPin go x)
+    (showLaw go x)
+    (showApp go x)))
+
+;; Recursive entry point for PLAN printing.
+(define (showPlanVal x)
+  (showPlan showPlanVal x))
+
+;; Print a PLAN value embedded in a Wisp ATOM.
+;; Nats print as string/number directly.
+;; Non-nats are wrapped in {} to distinguish from wisp syntax.
+(define (showAtom v)
+  (Ifz (IsNat v)
+    (lstrcat ~["{" (showPlanVal v) "}"])
+    (showNatVal v)))
+
+;; Is x an EXPR node?  (not a nat, and head is 0)
+(define (isExpr x)
+  (And (Nil (IsNat x)) (Eq 0 (Hd x))))
+
+;; Is x an EXPR with head tag t?  (e.g. "BRAK", "CURL", "JUXT")
+(define (isTagged t x)
+  (And (isExpr x) (Gt (Sz x) 1) (Eq t (Ix 0 x))))
+
+;; (x..) -> "(x0 x1 x2)"
+(define (showParen go x)
+  (lstrcat ~["(" (showExprs go (stream-from 0 x)) ")"]))
+
+(tests
+  ( (showParen (const "hi") [1 2 3])
+    "(hi hi hi)" ))
+
+;; (BRAK x..) -> "[x1 x2 x3]"
+(define (showBrak go x)
+  (lstrcat ~["[" (showExprs go (stream-from 1 x)) "]"]))
+
+;; (CURL x..) -> "{x1 x2 x3}"
+(define (showCurl go x)
+  (lstrcat ~["{" (showExprs go (stream-from 1 x)) "}"]))
+
+;; Show a JUXT form: prefix immediately followed by argument.
+;; JUXT x [..]  -> x[..]
+;; JUXT x {..}  -> x{..}
+;; JUXT x (..)  -> x(..)
+;; JUXT x "str" -> x"str"
+(define (showJuxt go x)
+  (strWeld (go (Ix1 x)) (go (Ix2 x))))
+
+(define (showSymbol x)
+  x)
+
+;; Print a wisp expression to a string.
+(define (showExpr x)
+  (let ((tag (Ix0 x)))
+    (If (IsNat x) (showSymbol x)
+      (If (Eq 1 (Hd x)) (showAtom (Ix0 x))
+        (If (Eq "JUXT" tag) (showJuxt showExpr x)
+          (If (Eq "BRAK" tag) (showBrak showExpr x)
+            (If (Eq "CURL" tag) (showCurl showExpr x)
+              (showParen showExpr x))))))))
+
+(define helloex
+  (lstrcat ~[dquote "hello" dquote]))
+
+(tests
+  ("foo"          (showExpr "foo"))
+  ("0"            (showExpr (1 0)))
+  ("42"           (showExpr (1 42)))
+  (helloex        (showExpr (1 "hello")))
+  ("{<{Inc}>}"    (showExpr (1 Inc)))
+  ("(f x y)"      (showExpr (0 "f" "x" "y")))
+  ("[a b c]"      (showExpr (0 "BRAK" "a" "b" "c")))
+  ("{a b c}"      (showExpr (0 "CURL" "a" "b" "c")))
+  ("f(a b)"       (showExpr (0 "JUXT" "f" (0 "a" "b"))))
+  ("f[a b]"       (showExpr (0 "JUXT" "f" (0 "BRAK" "a" "b"))))
+  ("f{a b}"       (showExpr (0 "JUXT" "f" (0 "CURL" "a" "b"))))
+  ("(f (g x) y)"  (showExpr (0 "f" (0 "g" "x") "y"))))
+
+(tests
+  ;; PLAN printer directly
+  ("42"           (showPlanVal 42))
+  (helloex        (showPlanVal "hello"))
+  ("<{Inc}>"      (showPlanVal Inc))
+  ("[1 2]"        (showPlanVal (0 1 2)))
+  ("3[1 2]"       (showPlanVal (3 1 2))))
+
+
+;;; Pretty Printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Join a list of strings with newlines.
+(define (unlines xs[hd tl])
+  (And xs
+    (Ifz tl hd
+      (lstrcat ~[hd newline (unlines tl)]))))
+
+;; A newline followed by indentation (as a lazy list of fragments).
+(define (nlIndent n)
+  [newline (lrep " " n)])
+
+(define (scanLoop limit acc frags0 frags[hd tl])
+  (Ifz frags (lstrcat frags0)
+    (let1 acc (Add acc (Bytes hd))
+      (And (Le acc limit)
+        (scanLoop limit acc frags0 tl)))))
+
+;; Scan a lazy list of string fragments, summing Bytes.
+;; If total exceeds `limit`, return 0 (too wide).
+;; If list exhausted within limit, return the lstrcat result.
+(define (scanFlat limit frags)
+  (scanLoop limit 0 frags frags))
+
+;; Try flat: produce fragments lazily, scan up to wid.
+;; If fits, return the materialized string.
+;; If too wide, call breakFn (a thunk).
+(define (tryFlat wid frags breakFn)
+  (let ((flat (scanFlat wid frags)))
+    (Ifz flat breakFn flat)))
+
+;;; Flat fragment producers (return lazy lists of string fragments) ;;;;;;;;;;;;
+
+;; Flat fragments for a nat value.
+(define (flatNatVal n)
+  (If (isString n)
+    [dquote [n [dquote NIL]]]
+    [(showNat n) NIL]))
+
+;; Flat fragments for a name.
+(define (flatName n)
+  (If (isString n) [n NIL]
+    [(showNat n) NIL]))
+
+;; Flat fragments for a space-separated list of items.
+(define (flatExprs go xs[hd tl])
+  (Ifz xs NIL
+    (Ifz tl (go hd)
+      (lweld (go hd) [" " (flatExprs go tl)]))))
+
+;; Flat fragments for fields in brackets: [a b c]
+(define (flatFields go x)
+  (lweld ["[" NIL] (lweld (flatExprs go (stream-from 0 x)) ["]" NIL])))
+
+;; Flat fragments for a pin.
+(define (flatPin go x)
+  (let ((item (Unpin x)))
+    (If (IsLaw item)
+      (lweld ["<{" NIL] (lweld (flatName (Name item)) ["}>" NIL]))
+      (lweld ["<" NIL] (lweld (go item) [">" NIL])))))
+
+;; Flat fragments for a law.
+(define (flatLaw go x)
+  (lcat ~[ ~["{"]
+           (go (Arity x))
+           ~[" "]
+           (flatName (Name x))
+           ~[" "]
+           (go (Body x))
+           ~["}"]]))
+
+;; Flat fragments for an app.
+(define (flatApp go x)
+  (let1 hd (Hd x)
+    (Ifz hd (flatFields go x)
+      (lweld (go hd) (flatFields go x)))))
+
+;; Flat fragments for a PLAN value.
+(define (flatPlan go x)
+  (Case4 (Type x)
+    (flatNatVal x)
+    (flatPin go x)
+    (flatLaw go x)
+    (flatApp go x)))
+
+;; Recursive entry point for flat PLAN fragments.
+(define (flatPlanVal x)
+  (flatPlan flatPlanVal x))
+
+;; Flat fragments for a PLAN atom in a wisp context.
+(define (flatAtom v)
+  (Ifz (IsNat v)
+    (lweld ["{" NIL] (lweld (flatPlanVal v) ["}" NIL]))
+    (flatNatVal v)))
+
+;; Flat fragments for wisp parens: (x0 x1 x2)
+(define (flatParen go x)
+  (lweld ["(" NIL] (lweld (flatExprs go (stream-from 0 x)) [")" NIL])))
+
+;; Flat fragments for wisp BRAK: [x1 x2 x3]
+(define (flatBrak go x)
+  (lweld ["[" NIL] (lweld (flatExprs go (stream-from 1 x)) ["]" NIL])))
+
+;; Flat fragments for wisp CURL: {x1 x2 x3}
+(define (flatCurl go x)
+  (lweld ["{" NIL] (lweld (flatExprs go (stream-from 1 x)) ["}" NIL])))
+
+;; Flat fragments for wisp JUXT: prefix followed by argument.
+(define (flatJuxt go x[_ a b])
+  (lweld (go a) (go b)))
+
+;; Flat fragments for a wisp expression.
+(define (flatExpr x[tag])
+  (cond
+    ((IsNat x)       [x NIL])
+    ((Eq 1 (Hd x))   (flatAtom (Ix0 x)))
+    ((Eq "JUXT" tag) (flatJuxt flatExpr x))
+    ((Eq "BRAK" tag) (flatBrak flatExpr x))
+    ((Eq "CURL" tag) (flatCurl flatExpr x))
+    (else            (flatParen flatExpr x))))
+
+;;; Pretty printers (use tryFlat with lazy fragments) ;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;; Indent a string by n spaces.
+(define (indent n str)
+  (strWeld (lstrcat (lrep " " n)) str))
+
+;; Pretty-print a list of items, each on its own line at the given indent.
+(define (prettyLines go wid ind xs[hd tl])
+  (And xs
+    (Ifz tl [(go wid ind hd) NIL]
+      [(go wid ind hd) (prettyLines go wid ind tl)])))
+
+;; Pretty-print a wisp EXPR.
+(define (prettyParen go wid ind x)
+  (tryFlat wid (flatParen flatExpr x)
+    (let* ((elems (stream-from 0 x))
+           (ind2  (Add ind 2))
+           (lines (prettyLines go wid ind2 elems)))
+      (lstrcat ~["(" newline (unlines (lmap (indent ind2) lines)) ")"]))))
+
+;; Pretty-print a wisp BRAK.
+(define (prettyBrak go wid ind x)
+  (tryFlat wid (flatBrak flatExpr x)
+    (let* ((elems (stream-from 1 x))
+           (ind2  (Add ind 2))
+           (lines (prettyLines go wid ind2 elems)))
+      (lstrcat ~["[" newline (unlines (lmap (indent ind2) lines)) "]"]))))
+
+;; Pretty-print a wisp CURL.
+(define (prettyCurl go wid ind x)
+  (tryFlat wid (flatCurl flatExpr x)
+    (let* ((elems (stream-from 1 x))
+           (ind2  (Add ind 2))
+           (lines (prettyLines go wid ind2 elems)))
+      (lstrcat ~["{" newline (unlines (lmap (indent ind2) lines)) "}"]))))
+
+;; Pretty-print a wisp JUXT.
+(define (prettyJuxt go wid ind x[_ a b])
+  (tryFlat wid (flatJuxt flatExpr x)
+    (strWeld (go wid ind a) (go wid ind b))))
+
+;; TODO: can't there just be a single `tryFlat` here and then not do it
+;; every time?
+
+;; Pretty-print a wisp expression.
+(define (prettyExpr wid ind x[tag])
+  (cond
+    ((IsNat x)       (showSymbol x))
+    ((Eq 1 (Hd x))   (lstrcat (flatAtom (Ix0 x))))
+    ((Eq "JUXT" tag) (prettyJuxt prettyExpr wid ind x))
+    ((Eq "BRAK" tag) (prettyBrak prettyExpr wid ind x))
+    ((Eq "CURL" tag) (prettyCurl prettyExpr wid ind x))
+    (else            (prettyParen prettyExpr wid ind x))))
+
+;; Pretty-print PLAN fields in brackets.
+(define (prettyFields go wid ind x)
+  (tryFlat wid (flatFields flatPlanVal x)
+    (let* ((elems (stream-from 0 x))
+           (ind2  (Add ind 2))
+           (lines (prettyLines go wid ind2 elems)))
+      (lstrcat ~["[" newline (unlines (lmap (indent ind2) lines)) "]"]))))
+
+;; TODO: in the above, put a newline before the ] and indent it to the
+;; same depth as the [.
+
+;; Pretty-print a PLAN pin.
+(define (prettyPin go wid ind x)
+  (let ((item (Unpin x)))
+    (If (IsLaw item)
+      (lstrcat ~["<{" (showName (Name item)) "}>"])
+      (lstrcat ~["<" (go wid ind item) ">"]))))
+
+;; Pretty-print a PLAN law.
+(define (prettyLaw go wid ind x)
+  (tryFlat wid (flatLaw flatPlanVal x)
+    (let ((ind2 (Add ind 2)))
+      (lstrcat ~["{" (showNat (Arity x)) " " (showName (Name x))
+                 newline (indent ind2 (go wid ind2 (Body x))) "}"]))))
+
+;; Pretty-print a PLAN app.
+(define (prettyApp go wid ind x)
+  (tryFlat wid (flatApp flatPlanVal x)
+    (let ((hd (Hd x)))
+      (Ifz hd (prettyFields go wid ind x)
+        (strWeld (go wid ind hd) (prettyFields go wid ind x))))))
+
+;; Pretty-print a PLAN value.
+(define (prettyPlan wid ind x)
+  (Case4 (Type x)
+    (showNatVal x)
+    (prettyPin prettyPlan wid ind x)
+    (prettyLaw prettyPlan wid ind x)
+    (prettyApp prettyPlan wid ind x)))
+
+;; Top-level entry points.
+(define (prettyPlanStr wid x)
+  (prettyPlan wid 0 x))
+
+(define (prettyExprStr wid x)
+  (prettyExpr wid 0 x))
+
+;; Test: flat fragments materialize correctly.
+(tests
+  ("42"           (lstrcat (flatNatVal 42)))
+  (helloex        (lstrcat (flatNatVal "hello")))
+  ("foo"          (lstrcat (flatName "foo")))
+  ("[1 2 3]"      (lstrcat (flatFields flatPlanVal [1 2 3])))
+  ("<{Inc}>"      (lstrcat (flatPlanVal Inc)))
+  ("[1 2]"        (lstrcat (flatPlanVal (0 1 2))))
+  ("3[1 2]"       (lstrcat (flatPlanVal (3 1 2)))))
+
+;; Test: scanFlat returns string when short enough.
+(tests
+  ("(a b c)"      (scanFlat 60 (flatParen flatExpr (0 "a" "b" "c"))))
+  ("[a b]"        (scanFlat 60 (flatBrak flatExpr (0 "BRAK" "a" "b")))))
+
+;; Test: scanFlat returns 0 when too wide.
+(tests
+  (0 (scanFlat 5 (flatParen flatExpr (0 "a" "b" "c" "d" "e" "f")))))
+
+;; Test: unlines
+(tests
+  ("a"         (unlines ~["a"]))
+  ((lstrcat ~["a" newline "b" newline "c"])
+               (unlines ~["a" "b" "c"])))
+
+;; Test: short expressions stay flat.
+(tests
+  ("(f x y)"      (prettyExprStr 60 (0 "f" "x" "y")))
+  ("[a b c]"      (prettyExprStr 60 (0 "BRAK" "a" "b" "c")))
+  ("{a b c}"      (prettyExprStr 60 (0 "CURL" "a" "b" "c")))
+  ("f(a b)"       (prettyExprStr 60 (0 "JUXT" "f" (0 "a" "b"))))
+  ("42"           (prettyPlanStr 60 42))
+  ("<{Inc}>"      (prettyPlanStr 60 Inc))
+  ("[1 2 3]"      (prettyPlanStr 60 (0 1 2 3)))
+  ("3[1 2]"       (prettyPlanStr 60 (3 1 2))))
+
+;; Test: narrow width forces breaking.
+(tests
+  ((unlines ~["(" "  f" "  x" "  y" "  z)"])
+   (prettyExprStr 5 (0 "f" "x" "y" "z")))
+
+  ((unlines ~["[" "  a" "  b" "  c]"])
+   (prettyExprStr 5 (0 "BRAK" "a" "b" "c")))
+
+  ((unlines ~["{" "  a" "  b" "  c}"])
+   (prettyExprStr 5 (0 "CURL" "a" "b" "c")))
+
+  ((unlines ~["[" "  1" "  2" "  3]"])
+   (prettyPlanStr 5 (0 1 2 3)))
+
+  ((unlines ~["3[" "  1" "  2" "  3]"])
+   (prettyPlanStr 5 (3 1 2 3))))
+
+;; Test: nested breaking with narrow width.
+(tests
+  ((unlines ~["(" "  (" "    g" "    a" "    b)" "  c)"])
+   (prettyExprStr 5 (0 (0 "g" "a" "b") "c"))))
+
+
+;;; REPL ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define barNewline
+  (Add 256 10))
+
+(define (putStrLn str)
+  (Output (Add str (Lsh barNewline (Mul 8 (Bytes str))))))
+
+(define (print e)
+  (putStrLn (prettyExprStr 60 e)))
+
+(define (unbar x)
+  (Clear (Dec (Bits x)) x))
+
+(define (getChar _)
+  (let ((x (Input 1)))
+    (If (Le x 1) Error("getChar: EOF")
+      (Sub x 256))))
+
+(define (readStdin _)
+  (let ((c (Sub (Input 1) 256)))
+    (And c
+      [c (readStdin c)])))
+
+(define (repl replstep e0 cs)
+  (let ((cs (skipSpace cs)))
+    (And cs
+      (read cs {x cs ->
+        (let* ((res[e1 o] (replstep e0 x)))
+          (Seq (print o)
+            (repl replstep e1 cs)))}))))
+
+; Use this approach instead:
+;
+; Scanner produces a string or 0, and then we read from the string
+; (which is guarenteed to parse).  Scanner complains about stray
+; terminators and EOFs before terminators, but from the perspective of
+; it's return value, it just pretends that they don't exist.
+;
+; (define (repl replstep e0 _)
+;   (let ((input (scanExpr 0)))
+;     (Ifz input 0  ;; EOF, done
+;       (let* ((x    (read (lexplode input) {x _ -> x}))
+;              (res[e1 o] (replstep e0 x)))
+;         (Seq (print o)
+;           (repl replstep e1 0))))))
+
+(define ex (const (Unpin repl)))
+(define foldr (const (Unpin foldr-loop)))
+
+(define (runrepl args)
+  (print "STARTING REPL")
+  (repl {env o -> [env o]} 0 (readStdin 0)))

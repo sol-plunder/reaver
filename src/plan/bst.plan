@@ -1,0 +1,457 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+
+;;;; Balanced Binary Search Trees
+;;;; ============================
+;;;;
+;;;; This implements a basic functional binary search tree, used for
+;;;; Reaver environment.
+;;;;
+;;;; This is a weight-balanced tree (BB tree) using the integer
+;;;; parameters (δ=4, γ=2).  Every node stores its subtree size,
+;;;; and the balance invariant requires that neither child's size
+;;;; exceed 4× the other's.  When an insertion or deletion violates
+;;;; this, a single or double rotation is chosen based on γ.  All
+;;;; operations are O(log n).  The (4,2) pair is one of the few
+;;;; integer parameterizations proven correct under both insertion
+;;;; and deletion (Hirai & Yamamoto, 2011).
+;;;;
+;;;; A BST node is represented with this Haskell datatype:
+;;;;
+;;;;     data Node
+;;;;         = E
+;;;;         | N { sz :: !Nat, key::Nat, val::Any, left::Node, right::Node }
+;;;;
+;;;; This datatype is encoded into this PLAN structure:
+;;;;
+;;;;     E = 0
+;;;;     N s k v l r = s[k v l r]
+;;;;
+;;;; As a consequence `Hd` will always give the size, the size is
+;;;; always in WHNF without needing to explicitly force it, and the
+;;;; empty-case is just Ifz, And, or Nil.
+
+(defval EMPTY 0)
+(defval .bst-sz Hd)  (defval bst-sz= Coup)
+(defval .bst-key .0) (defval bst-key= (Up 0))
+(defval .bst-val .1) (defval bst-val= (Up 1))
+(defval .bst-lef .2) (defval bst-lef= (Up 2))
+(defval .bst-ryt .3) (defval bst-ryt= (Up 3))
+
+(defval E 0)
+
+; Note that N forces the left and right branches by looking at the size,
+; but that we don't force the key. (TODO: should we?)
+
+(defval bst-sz Hd)
+
+(define (N k v l r)
+  (define sz (Add (Inc (.bst-sz l)) (.bst-sz r)))
+  (Seq k
+    (sz k v l r)))
+
+(define (bst-sing k v)
+  (Seq k
+    (1 k v 0 0)))
+
+(defval empty-bst E)
+
+(define (L k v) (1 k v 0 0))
+
+(define (single-l key val a right[koy vol b c])
+  (N koy vol (N key val a b) c))
+
+(define (single-r key val _left[koy vol a b] c)
+  (N koy vol a (N key val b c)))
+
+(define (double-l key val a right[rkey rval son[skey sval b c] d])
+  (N skey sval (N key val a b) (N rkey rval c d)))
+
+(define (double-r key val left[lkey lval a son[skey sval b c]] d)
+  (N skey sval (N lkey lval a b) (N key val c d)))
+
+(tests
+  ((single-l 7 7 E (L 8 8))
+   (N 8 8 (L 7 7) E))
+
+  ((single-r 7 7 (L 6 6) E)
+   (N 6 6 E (L 7 7)))
+
+  ((single-l 7 7 E (N 8 8 E (L 9 9)))
+   (N 8 8 (L 7 7) (L 9 9)))
+
+  ((single-l 5 5 E (N 8 8 (L 7 7) (L 9 9)))
+   (N 8 8 (N 5 5 E (L 7 7)) (L 9 9)))
+
+  ((double-l 5 5 E (N 8 8 (L 7 7) (L 9 9)))
+   (N 7 7 (L 5 5) (N 8 8 E (L 9 9))))
+
+  ((double-r 5 5 (N 2 2 (L 1 1) (L 3 3)) E)
+   (N 3 3 (N 2 2 (L 1 1) E) (L 5 5))))
+
+(define (rotate-l k v l r[_ _ rl rr])
+  (If (Lt (.bst-sz rl) (Mul 2 (.bst-sz rr)))
+    (single-l k v l r)
+    (double-l k v l r)))
+
+(define (rotate-r k v l[_ _ ll lr] r)
+  (If (Lt (.bst-sz lr) (Mul 2 (.bst-sz ll)))
+    (single-r k v l r)
+    (double-r k v l r)))
+
+(define (balance k v l r)
+  (define lsz (.bst-sz l))
+  (define rsz (.bst-sz r))
+  (define xsz (Inc (Add lsz rsz)))
+  (define top (xsz k v l r))
+  (cond
+    ((Le (Add lsz rsz) 1) top)
+    ((Ge rsz (Mul 4 lsz)) (rotate-l k v l r))
+    ((Ge lsz (Mul 4 rsz)) (rotate-r k v l r))
+    (else                 top)))
+
+(define (bst-insert key val x[xkey xval left right])
+  (Ifz x (bst-sing key val)
+    (Ix (Cmp key xkey)
+      [(balance xkey xval (bst-insert key val left) right)
+       ((.bst-sz x) key val left right)
+       (balance xkey xval left (bst-insert key val right))])))
+
+(define (bst-duo k1 v1 k2 v2)
+  (bst-insert k2 v2 (bst-sing k1 v1)))
+
+(define (bst-search key tree[k v l r])
+  (And tree
+    (Case3 (Cmp key k)
+      (bst-search key l)
+      [v]
+      (bst-search key r))))
+
+(define (bst-idx k t)
+  (.0 (bst-search k t)))
+
+(define (bst-has k t)
+  (Truth (bst-search k t)))
+
+(define (bst-map f bst[k v l r])
+  (And bst
+    ((Hd bst) k (f v) (bst-map f l) (bst-map f r))))
+
+(define (bst-from-pairs-list-loop acc list[kv[k v] ls])
+  (Seq acc
+    (Ifz list acc
+      (bst-from-pairs-list-loop (bst-insert k v acc) ls))))
+
+(define (bst-from-pairs-list ls)
+  (bst-from-pairs-list-loop 0 ls))
+
+(define (bst-from-pairs-row row)
+  (bst-from-pairs-list (stream row)))
+
+(define (derp n)
+  (bst-from-pairs-list (stream (gen n {x -> (define xx (Mul (Inc x) 11))
+                                            [xx xx]}))))
+
+(tests
+  ((bst-search 11 (derp 0)) [])
+  ((bst-search 11 (derp 1)) [11])
+  ((bst-search 11 (derp 2)) [11])
+  ((bst-search 11 (derp 3)) [11])
+  ((bst-search 11 (derp 4)) [11])
+  ((bst-search 11 (derp 5)) [11])
+  ((bst-search 11 (derp 6)) [11])
+  ((bst-search 66 (derp 6)) [66])
+  ((bst-search 77 (derp 6)) []))
+
+(tests
+  ((derp 2) (N 11 11 E (L 22 22)))
+  ((derp 3) (N 22 22 (L 11 11) (L 33 33)))
+  ((derp 4) (N 22 22 (L 11 11) (N 33 33 E (L 44 44))))
+  ((derp 5) (N 22 22 (L 11 11) (N 44 44 (L 33 33) (L 55 55)))))
+
+(define (NN x l r) (N x x l r))
+(define (LL x)     (L x x))
+
+(tests
+  ((NN 44 (NN 22 (LL 11) (LL 33))
+          (NN 55 E (LL 66)))
+   (derp 6))
+
+  (((NN 44) ((NN 22) (LL 11) (LL 33)) ((NN 66) (LL 55) (LL 77)))
+   (derp 7))
+
+  ((bst-insert 2 22 0)
+   (bst-sing 2 22)))
+
+(defval ex (NN 4 (LL 2) (LL 6)))
+
+(tests
+  ((bst-insert 4 "four" ex)
+   (N 4 "four" (L 2 2) (L 6 6)))
+
+  ((bst-insert 2 "two" ex)
+   (N 4 4 (L 2 "two") (L 6 6)))
+
+  ((bst-insert 6 "six" ex)
+   (N 4 4 (L 2 2) (L 6 "six")))
+
+  ((bst-insert 1 "one" ex)
+   (N 4 4 (N 2 2 (L 1 "one") E) (L 6 6))))
+
+(tests
+  ((bst-insert 2 "two" ex)   (NN 4 (L 2 "two")              (LL 6)))
+  ((bst-insert 3 "three" ex) (NN 4 ((NN 2) E (L 3 "three")) (LL 6)))
+  ((bst-insert 5 "fiv" ex)   (NN 4 ((NN 2) E E)             (NN 6 (L 5 "fiv") E)))
+  ((bst-insert 6 "six" ex)   (NN 4 (LL 2)                   (L 6 "six")))
+  ((bst-insert 7 "sev" ex)   (NN 4 (LL 2)                   (NN 6 E (L 7 "sev")))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (delete-find-max t[k v l r])
+  (define _kr[km r2] (delete-find-max r))
+  (Ifz r [[k v] l]
+    [km (balance k v l r2)]))
+
+(define (delete-find-min t[k v l r])
+  (define _kl[km l2] (delete-find-min l))
+  (Ifz l [[k v] r]
+    [km (balance k v l2 r)]))
+
+(define (glue l r)
+  (define _a[_b[lkm lm] l2] (delete-find-max l))
+  (define _c[_d[rkm rm] r2] (delete-find-min r))
+  (cond
+    ((Nil l)                      r)
+    ((Nil r)                      l)
+    ((Gt (.bst-sz l) (.bst-sz r)) (balance lkm lm l2 r))
+    (else                         (balance rkm rm l r2))))
+
+(define (bst-alter f key x[xsz xkey xval l r])
+  (define f0  (f 0))
+  (define fxv (f [xval]))
+  (Ifz x
+      (Ifz f0
+        E
+        (bst-sing key (Ix0 f0)))
+      (Case3 (Cmp key xkey)
+        (balance xkey xval
+          (bst-alter f key l) r)
+        (Ifz fxv (glue l r)
+          (xsz xkey (Ix0 fxv) l r))
+        (balance xkey xval l
+          (bst-alter f key r)))))
+
+; alter-known alters the value associated with a key which is known to
+; be present, so the function is not passed a maybe.
+
+(define (bst-alter-known f key x[xkey xval l r])
+  (define xsz (Hd x))
+  (Ifz x E
+      (Case3 (Cmp key xkey)
+        (balance xkey xval (bst-alter-known f key l) r)
+        (xsz xkey (f xval) l r)
+        (balance xkey xval l (bst-alter-known f key r)))))
+
+(define (bst-delete key tree[xkey xval l r])
+  (define xsz (Hd tree))
+  (Ifz tree tree
+      (Case3 (Cmp key xkey)
+        (balance xkey xval (bst-delete key l) r)
+        (glue l r)
+        (balance xkey xval l (bst-delete key r)))))
+
+(define (bst-search-case k t nf f)
+  (define r (bst-search k t))
+  (Ifz r nf
+    (f (Ix0 r))))
+
+(define (bst-search-known k bst)
+  (Ix0 (bst-search k bst)))
+
+(define (bst-walk bst[k v l r])
+  (And bst
+  (lweld (bst-walk l)
+  (lcons bst
+  (bst-walk r)))))
+
+(define (bst-to-pairs-list bst)
+  (lmap (take 2) (bst-walk bst)))
+
+(define (bst-save tree) ; to [k v k v k v] format
+  (Row 0 (Lsh (.bst-sz tree) 1)
+    (lcat-rows (bst-to-pairs-list tree))))
+
+(tests
+  ( [1 1 5 5 9 9]
+    (bst-save (N 5 5 (L 1 1) (L 9 9)))))
+
+(define (bst-keys-list tree) (lmap Ix0 (bst-walk tree)))
+(define (bst-vals-list tree) (lmap Ix1 (bst-walk tree)))
+(define (bst-vals-row tree)  (Row 0 (.bst-sz tree) (bst-vals-list tree)))
+(define (bst-keys-row tree)  (Row 0 (.bst-sz tree) (bst-keys-list tree)))
+
+(tests
+  ([1 5 9] (bst-vals-row (N 1 5 (L 0 1) (L 6 9))))
+  ([0 1 2] (bst-keys-row (N 1 5 (L 0 1) (L 2 9)))))
+
+(define (bst-sort-row row)
+  (bst-keys-row (bst-from-pairs-list (lmap dup (stream row)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;; Set Operations: Union and Intersection
+
+; bst-join3 k v l r
+;
+; Like `balance`, but l and r may have arbitrary sizes (e.g. after a split).
+; Uses the same (δ=4) threshold: if the size ratio is within bounds we just
+; call N, otherwise we descend into the heavier side and balance on the way up.
+; The two helpers are nested because they call bst-join3 recursively.
+
+(define (bst-join3 k v l[lk lv ll lr] r[rk rv rl rr])
+  (define lsz (.bst-sz l))
+  (define rsz (.bst-sz r))
+  (cond
+    ((Le (Add lsz rsz) 1) (N k v l r))
+    ((Ge rsz (Mul 4 lsz)) (balance rk rv (bst-join3 k v l rl) rr))
+    ((Ge lsz (Mul 4 rsz)) (balance lk lv ll (bst-join3 k v lr r)))
+    (else                 (N k v l r))))
+
+; bst-join2 l r
+;
+; Joins two BSTs where all keys in l < all keys in r, with no middle key.
+; Mirrors `glue` exactly, but uses bst-join3 instead of balance so it
+; handles arbitrary size differences (which can arise after intersection).
+
+(define (bst-join2 l r)
+  (define _a[_b[lkm lm] l2] (delete-find-max l))
+  (define _c[_d[rkm rm] r2] (delete-find-min r))
+  (cond
+    ((Nil l)                      r)
+    ((Nil r)                      l)
+    ((Gt (.bst-sz l) (.bst-sz r)) (bst-join3 lkm lm l2 r))
+    (else                         (bst-join3 rkm rm l r2))))
+
+; bst-split key tree -> [[left maybe-val] right]
+;
+; Splits tree on key, returning:
+;   left      BST of all keys < key
+;   maybe-val 0 if key absent, [val] if present
+;   right     BST of all keys > key
+;
+; Encoded as [[left maybe-val] right] to match the 2-element list
+; destructuring style used throughout this file (see glue, delete-find-max).
+
+(define (bst-split key x[xkey xval l r])
+  (Ifz x [[E 0] E]
+    (Case3 (Cmp key xkey)
+      (let1 _s[_p[sl sm] sr] (bst-split key l)
+        [[sl sm] (bst-join3 xkey xval sr r)])
+      [[l [xval]] r]
+      (let1 _s[_p[sl sm] sr] (bst-split key r)
+        [[(bst-join3 xkey xval l sl) sm] sr]))))
+
+; bst-union ta tb -> BST
+;
+; Left-biased union: when both trees contain the same key, ta's value is kept.
+; Splits ta on each root key from tb, recurses on both halves, then rejoins.
+; O(m log(n/m + 1)) where m ≤ n.
+
+(define (bst-union ta tb[bkey bval bl br])
+  (cond
+    ((Nil tb) ta)
+    ((Nil ta) tb)
+    (else
+      (let1 _s[_p[la mv] ra] (bst-split bkey ta)
+        (bst-join3 bkey
+          (Ifz mv bval (Ix0 mv))
+          (bst-union la bl)
+          (bst-union ra br))))))
+
+; bst-intersect ta tb -> BST
+;
+; Left-biased intersection: only keys present in both trees are kept,
+; with ta's value used when both contain a key.
+; O(m log(n/m + 1)) where m ≤ n.
+
+(define (bst-intersect ta tb[bkey bval bl br])
+  (cond
+    ((Nil ta) E)
+    ((Nil tb) E)
+    (else
+      (let1 _s[_p[la mv] ra] (bst-split bkey ta)
+        (let* ((li (bst-intersect la bl))
+               (ri (bst-intersect ra br)))
+          (Ifz mv (bst-join2 li ri)
+            (bst-join3 bkey (Ix0 mv) li ri)))))))
+
+(tests
+  ; --- bst-union ---
+
+  ; union with empty is identity
+  ((bst-keys-row (bst-union (NN 2 (LL 1) (LL 3)) E))   [1 2 3])
+  ((bst-keys-row (bst-union E (NN 2 (LL 1) (LL 3))))   [1 2 3])
+
+  ; union of disjoint trees contains all keys
+  ((bst-keys-row (bst-union (NN 2 (LL 1) (LL 3))
+                             (NN 6 (LL 5) (LL 7))))     [1 2 3 5 6 7])
+
+  ; union of overlapping trees contains all keys once
+  ((bst-keys-row (bst-union (NN 2 (LL 1) (LL 3))
+                             (NN 4 (LL 3) (LL 5))))     [1 2 3 4 5])
+
+  ; left-biased on conflict
+  ((bst-search 3 (bst-union (bst-sing 3 "left")
+                             (bst-sing 3 "right")))      ["left"])
+
+  ; --- bst-intersect ---
+
+  ; intersect with empty is empty
+  ((bst-intersect (NN 2 (LL 1) (LL 3)) E)               E)
+  ((bst-intersect E (NN 2 (LL 1) (LL 3)))               E)
+
+  ; intersect of disjoint trees is empty
+  ((bst-intersect (NN 2 (LL 1) (LL 3))
+                   (NN 6 (LL 5) (LL 7)))                 E)
+
+  ; intersect of overlapping trees contains only shared keys
+  ((bst-keys-row (bst-intersect (NN 2 (LL 1) (LL 3))
+                                 (NN 4 (LL 3) (LL 5)))) [3])
+
+  ; intersect of identical trees returns the same key set
+  ((bst-keys-row (bst-intersect (derp 5) (derp 5)))
+   (bst-keys-row (derp 5)))
+
+  ; left-biased on conflict
+  ((bst-search 3 (bst-intersect (bst-sing 3 "left")
+                                 (bst-sing 3 "right")))  ["left"]))
+
+(#export
+ empty-bst
+ bst-sz
+ bst-sing
+ bst-duo
+ bst-insert
+ bst-search
+ bst-idx
+ bst-has
+ bst-map
+ bst-from-pairs-list
+ bst-from-pairs-row
+ bst-alter
+ bst-alter-known
+ bst-delete
+ bst-search-known
+ bst-walk
+ bst-to-pairs-list
+ bst-save
+ bst-keys-list
+ bst-vals-list
+ bst-vals-row
+ bst-keys-row
+ bst-sort-row
+ bst-split
+ bst-union
+ bst-intersect)

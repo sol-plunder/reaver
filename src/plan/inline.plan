@@ -1,0 +1,370 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@lambda
+
+;;; Inliner
+;;; =======
+;;;
+;;; This performs inlinine before we give the code to the compiler.
+;;; Note that this is for the purposes of producing canonical outputs
+;;; for jets, not for the purposes of optimization.  Because of this, all
+;;; inlining happens on the basis of explicit requests for inlining
+;;; from the code itself, never based on performance heuristics.
+;;;
+;;; This codes doesn't *decide* when to inline, it simply executes all
+;;; requests for inlining to the maximum extent possible.
+;;;
+;;;
+;;; One Step Of Inlining
+;;; --------------------
+;;;
+;;; We inline whenever we encounter an expression which is marked for
+;;; inlining, and which has been given all of it's arguments.
+;;;
+;;; This "marking" can either be when a function is marked as
+;;; "always inline" or when the expression itself has (at any point in the
+;;; expression) been marked for inlining.
+;;;
+;;; Inlining a function encoded in de-bruijn indexes is very simple at
+;;; first glance, each argument-expression becomes a let-binding, and
+;;; then the body is just copied in place without any change.
+;;;
+;;; However, there are two things which complicate this.
+;;;
+;;; 1.  Whenever we bind one of those arguments to a let binding,
+;;;     the environment of each subsequent binding has one additional
+;;;     thing in it, which will require renumbering.
+;;;
+;;; 2.  In addition to inlining functions which are globally bound,
+;;;     we *also* support inlining functions which are locally bound
+;;;     (in a let-binding, for example).  This works the same, except
+;;;     that references into the shared context need to be renumbered,
+;;;     since the code is being moved into a deeper nesting context.
+;;;
+;;; The procedures needed to perform these re-numberings are mechanically
+;;; simple, but quite difficult to understand.  This is why de-bruijn
+;;; indexes are generally not used in complex compilers.  However,
+;;; we only have to do a tiny bit of this stuff, and it saves a lot
+;;; of work.
+
+; (defstruct Arg ARG           ; Collected Argument (for inlining)
+;   (arg-depth Nat)            ;   De Bruijn depth where arg was captured
+;   (arg-expr  AST))           ;   The argument expression
+
+(defval ARG 0)
+(defval .arg-depth Ix0) (defval arg-depth= (Up 0))
+(defval .arg-expr  Ix1) (defval arg-expr=  (Up 1))
+
+(defval ARG 0)
+
+; (defstruct Pot POT           ; Inlining Potential
+;   (pot-func Function)        ;   The function that could be inlined
+;   (pot-mark Bool)            ;   Has an inline mark been seen?
+;   (pot-deep Nat)             ;   De Bruijn depth where function was found
+;   (pot-need Nat)             ;   Arguments still needed before expansion
+;   (pot-args (List Arg)))     ;   Arguments collected so far
+
+(defval POT 0)
+(defval .pot-func Ix0) (defval pot-func= (Up 0))
+(defval .pot-mark Ix1) (defval pot-mark= (Up 1))
+(defval .pot-deep Ix2) (defval pot-deep= (Up 2))
+(defval .pot-need Ix3) (defval pot-need= (Up 3))
+(defval .pot-args Ix4) (defval pot-args= (Up 4))
+
+; (defstruct Res RES           ; Result of the inlining pass
+;   (res-exp AST)              ;   The transformed expression
+;   (res-pot (Maybe Pot)))     ;   Inlining potential (if more args needed)
+
+(defval RES 0)
+(defval .res-exp Ix0) (defval res-exp= (Up 0))
+(defval .res-pot Ix1) (defval res-pot= (Up 1))
+
+;; The =move-to= routine moves an expression into a deeper nesting
+;; context.  References to bindings introduced within the expression
+;; are unchanged, but free variables need to get bigger to accommodate
+;; the additional things in the enclosing environment.
+
+; TODO: reintroduce JUXT notation into branches (is is nicer).
+
+(patfun (move-to-loop from to l e)
+  mv(move-to-loop from to)
+  a(.0 e)
+  b(.1 e)
+  ll(Add l (Sz a))
+  (union-switch e
+    (V (If (Lt a l) e (V (Sub (Add a to) from))))
+    (M (M (mv l a)))
+    (A (A (mv l a) (mv l b)))
+    (L (L (mv l a) (mv (Inc l) b)))
+    (R (R (map (mv ll) a) (mv ll b)))
+    (F (lam-body= (mv (Inc (Add l (.lam-arity e))) (.lam-body e)) e))
+    (K (e))
+    (G (e))))
+
+(patfun (move-to from to already-bound top)
+  (If (Eq from to) top
+    (move-to-loop from to already-bound top)))
+
+;; =renum= renumbers references within each function argument, as we bind
+;; each one to a let binding.
+
+(patfun (renum d n args[a[ad ax] as])
+  (Seq n
+    (Ifz args NIL
+      (lcons
+        (move-to ad (Add d n) 0 ax)
+        (renum d (Inc n) as)))))
+
+;; =expand-pot= performs the actual inlining step.  Each argument is mapped
+;; to a let binding after renumbering their environments to accommodate
+;; this.  And then the actual law body is copied inline, while also
+;; renumbering it's free variables as needed.
+;;
+;; Since lambda bodies also have a self-reference in scope, we will need
+;; to bind something for that as well.  However, since we only inline
+;; functions which are not recursive, we know that this binding will
+;; never be used, so we just bind a constant zero.  This binding will
+;; get optimized away later, and adding a dummy binding here is much
+;; simpler than doing a more complex renumbering of the lambda body.
+
+(patfun (expand-pot d pot)
+  lam(.pot-func pot)
+  (lfoldr L (move-to (.pot-deep pot)
+                     d
+                     (Inc (.lam-arity lam))
+                     (.lam-body lam))
+    (renum d 0
+      (lcons (ARG d (K 0))
+        (lrev (.pot-args pot))))))
+
+;; =pot-is-full= checks to see if the inline potential of a result is
+;; ready for inline expansion.  This is true if:
+;;
+;; 1.  The potential is actually inhabited (it wont be if we don't
+;;     statically know which function is being called, for example).
+;;
+;; 2.  If the expression is marked for inlining (either the expression
+;;     contains an inline mark or the function itself is marked to always
+;;     be inlined).
+;;
+;; 3.  If the expression is a saturated function call.  =pot-need=
+;;     indicates the number of expression still pending before
+;;     saturation, so if this is zero, the expression is saturated.
+
+(patfun (pot-is-full maybe-pot[pot])
+  (And maybe-pot
+    (And (Nil (.pot-need pot)) (.pot-mark pot))))
+
+;; =reapply-step= applies an additional argument to the result of the
+;; inlining pass, producing another inline-result object.
+;;
+;;     reapply-step : Depth -> Res -> Arg -> Res
+;;
+;; A inline-result object is an expression and an inlining-potential.
+;;
+;; The expression part of the result is just the previous expression
+;; applied to the expression of the argument.  Because these arguments
+;; might be coming somewhere else, we need to re-number free variables
+;; (usually a noop).
+;;
+;; The inline-potential is nothing, if the previous potential was nothing,
+;; or if the previous potential was saturated.  Otherwise, it's the same as
+;; the previous potential, but with one additional argument added.
+
+(patfun (reapply-step d res arg)
+  {mpot[pot] = (.res-pot res)}
+  {need      = (.pot-need pot)}
+  (RES
+    (A (.res-exp res)
+       (move-to (.arg-depth arg) d 0 (.arg-expr arg)))
+    (And mpot
+      (And need
+        (SOME (pot-need=(Dec need)
+                (pot-args=(lcons arg (.pot-args pot))
+                  pot)))))))
+
+;; =reapply= is the part of the inline pass which performs the actual
+;; inlining
+;;
+;;     reapply : Depth -> List Arg -> Res -> Res
+;;
+;; The inline pass first transforms an expression into an inline potential
+;; and a list of pending arguments, and then calls this to actually
+;; process the arguments.
+;;
+;; At each step, if the inline potential is ripe, we perform the actual
+;; inline expansion.  Otherwise, we apply the arguments one by one,
+;; performing the same check each time.
+
+(patfun (reapply inline depth scope args f)
+  {maybe-pot[pot] = (.res-pot f)}
+  (DeepSeq f
+    (If (pot-is-full maybe-pot)
+      (inline depth scope args
+        (expand-pot depth pot))
+      (Ifz args f
+        (reapply inline depth scope (ltail args)
+          (reapply-step depth f (lhead args)))))))
+
+;;; Inline Dispatch
+;;; ---------------
+;;;
+;;; Each AST constructor has its own handler.  Constants and globals
+;;; produce a result with no pending arguments.  Local references look
+;;; up the binding's inlining potential in the scope.  Marks set the
+;;; inline flag on the result.  Applications accumulate the argument and
+;;; recur into the function position.  Lets and letrecs process their
+;;; bindings and bodies, threading the scope appropriately.
+;;;
+;;; The =lix-error= function used in inline-local is "list index with
+;;; error" — it indexes into the scope list by de Bruijn index, crashing
+;;; with a diagnostic message if the index is out of bounds.
+
+(patfun (inline-constant inline depth scope params x)
+  (reapply inline depth scope params
+    (RES x 0)))
+
+(patfun (inline-local inline depth scope params x[v])
+  (reapply inline depth scope params
+    (RES x (lix-error ("inline-local" v "in" scope) v scope))))
+
+(patfun (inline-global inline depth scope params x[p])
+  expr(.bind-expr (Unpin p))
+  (reapply inline depth scope params
+    (RES x
+      (And expr
+        (.res-pot (inline depth NIL NIL expr))))))
+
+(patfun (res-set-mark res)
+  {mpot[pot] = (.res-pot res)}
+  (Ifz mpot res
+    (res-pot=(pot-mark=(1) pot)
+      res)))
+
+(patfun (inline-mark inline depth scope params [b])
+  (reapply inline depth scope params
+    (res-set-mark (inline depth scope NIL b))))
+
+;; =inline-lambda= runs the inlining pass on a nested lambda expression.
+;;
+;; The lambda body is inlined in a deeper context (depth increased by
+;; arity + 1 for the self-reference).  The scope is extended with NONE
+;; entries for each new binding, since the lambda's own bindings don't
+;; have inlining potential from the outer context.
+;;
+;; The result carries an inlining potential if the function is not
+;; recursive, recording the function, whether it's marked for inlining,
+;; the current depth, and how many arguments are needed.
+
+(patfun (inline-lambda inline depth scope params lam)
+  {[_ lmark lrecr _ largs lbody] = lam}
+  {s_ = (lweld (lrep NONE (Inc largs)) scope)}
+  {d_ = (Inc (Add largs depth))}
+  (reapply inline depth scope params
+    (RES
+      (lam-body=(.res-exp (inline d_ s_ NIL lbody)) lam)
+      (And (Nil (.lam-recur lrecr))
+        [(POT lam lmark depth largs NIL)]))))
+
+;; =inline-letrec= runs the inlining pass on a letrec expression.
+
+(patfun (inline-letrec inline depth scope params x[vs b])
+  nbinds(Sz vs)
+  d_(Add depth nbinds)
+  s_(lweld (lrep NONE nbinds) scope)
+  vr(map (inline d_ s_ NIL) vs)
+  br(inline d_ s_ params b)
+  (RES (R (map .res-exp vr) (.res-exp br)) NONE))
+
+;; =inline-let= just runs the inlining pass on both the variable and
+;; the body.
+;;
+;; Note that the inline potential of the binding is added to the scope.
+;; This makes it possible to inline locally bound functions in the body.
+;;
+;; Also note that all of the parameters which we have collected are
+;; passed into the body.
+;;
+;; We never inline through let bindings, so the inline potential is
+;; always uninhabited.
+
+(patfun (inline-let inline depth scope params x[v b])
+  {[vrs vre] =  (inline depth       scope             NIL    v)}
+  {[brs _bre] = (inline (Inc depth) (lcons vre scope) params b)}
+  (RES (L vrs brs) NONE))
+
+;; =inline-apply= inlines an application expression.  This basically
+;; just adds the function argument to the list of pending parameters
+;; and then recurs back into the inlining pass.
+;;
+;; This explicit accumulation of arguments makes the pass more flexible,
+;; allowing the inliner to "see through" things like nested lets.
+;;
+;; Note that we run the inlining pass on the argument before
+;; adding it to the list.
+
+(patfun (inline-apply inline depth scope params [func arg])
+  {RES[x _] = (inline depth scope NIL arg)}
+  (inline depth scope (lcons (ARG depth x) params) func))
+
+;; The main inline function dispatches on the AST constructor using
+;; =union-switch=, which inspects the head tag of a tagged union (as
+;; produced by =deftype=) and selects the corresponding handler.  Each
+;; handler receives the recursive =inline= function as its first argument,
+;; enabling the open-recursion pattern.
+;;
+;;     inline : Depth -> List (Maybe Pot) -> List Arg -> AST -> Res
+
+(patfun (inline depth scope params x)
+  ((union-switch x
+     (K inline-constant)
+     (V inline-local)
+     (G inline-global)
+     (M inline-mark)
+     (F inline-lambda)
+     (R inline-letrec)
+     (L inline-let)
+     (A inline-apply)
+   ) inline depth scope params x))
+
+(def idlam
+  (F 0 1 0 "Id" 1 (V 0)))
+
+(patfun (res-no-pot x)
+  (RES x 0))
+
+(tests
+
+  ((RES (A (K 1) (K 2)) 0)
+   (inline 0 0 NIL (A (K 1) (K 2))))
+
+  ((res-no-pot
+     (L (K 0) ; self-ref
+     (L (K 2) ; argument
+     (V 0)))) ; idlam body
+   (inline 0 0 NIL (A idlam (K 2))))
+
+  ((res-no-pot
+     (L (K 0)     ; self-ref
+     (L (K 2)     ; argument
+     (A (V 0)     ; idlam body
+        (K 3))))) ; additional argument
+   (inline 0 0 NIL (A (A idlam (K 2)) (K 3))))
+
+)
+
+;;; Entry Point
+;;; -----------
+;;;
+;;; =eval-expr= is the primary entry point for external callers.  Given
+;;; an AST, it runs the full pipeline: inline, ingest, compile, and
+;;; evaluate the resulting PLAN law to produce a value.
+
+;; eval-expr : AST -> Any
+;;
+;; Run the full pipeline: inline, then compile.
+
+(patfun (eval-expr x)
+  (compile-expr (.res-exp (inline 0 NIL NIL x))))

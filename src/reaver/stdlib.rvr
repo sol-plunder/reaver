@@ -1,0 +1,585 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+(#bind bplan (#module bplan))
+(#import bplan)
+
+
+;;; Debugging ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind print
+  (#fun pin noinline "print" (print x)
+    (Trace x x)))
+
+(#bind error
+  (#fun pin noinline "error" (error e)
+    (Trace ("error" e)
+      (Throw e))))
+
+
+;;; Basic Syntactic Sugar ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#macro BRAK
+  (#fun pin noinline "BRAK" (BRAK _ u g _ _ form)
+    (0 u g
+      (Up 0 (1 0) form))))
+
+; TODO: support JUXT infix
+
+(#macro JUXT
+  (#fun pin noinline "JUXT" (JUXT _ u g _ _ form)
+    (If (Ne 3 (Sz form))
+      (error ("bad-JUXT" form))
+      [u g
+        [(_1 form) (_2 form)]])))
+
+
+;;; Quotation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#macro '
+  (#fun pin noinline "'" (' _ u g _ _ form)
+    (If (Ne 2 (Sz form))
+      error("bad-macro-call" "'" "wrong-size")
+      [u g (1 (_1 form))])))
+
+'x
+'1
+'x.y
+
+
+;;; Import with :module ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#macro :
+  (#fun pin noinline ":" (: _ u g _ _ form)
+    (Ifz (Eq 2 (Sz form)) error("bad-macro-call" ":" "wrong-size")
+      (#let ((nm (_1 form)))
+        (Ifz (Nat nm) error("bad-macro-call" ":" "expected-symbol")
+          [u g ["#bind" nm ["#module" nm]]])))))
+
+
+;;; Import all symbols with :*module ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; Note that :*module expands to (:module (#import module)) except that
+; we use (2 : module) to expand to a pre-resolved version of : to avoid
+; hygiene issues.  Also note that the expression we expand to is
+; meaningless, but macros are stateful and are processed left-to-right.
+; The function of the expression brings the module into scope, and the
+; argument imports it's symbols.
+
+(#macro :*
+  (#fun pin noinline ":*" (:* _ u g _ _ form)
+    (Ifz (Eq 2 (Sz form)) error("bad-macro-call" ":*" "wrong-size")
+      (#let ((nm (_1 form)))
+        (Ifz (Nat nm) error("bad-macro-call" ":*" "expected-symbol")
+         [u g [(2 : nm) ["#import" nm]]])))))
+
+:*scratch
+zero
+
+
+;;; assert ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind assert-impl
+  (#fun pin noinline "assert-impl" (assert-impl expr val)
+    (Ifz (Eq 1 val)
+      (error ("assert" "fail" expr "has" (0 val "!=" 1)))
+      expr)))
+
+(#macro assert
+  (#fun nopin noinline "assert" (assert _ u g _ _ x)
+    (#let ((xv (Ix1 x)))
+      [u g [(1 (assert-impl xv)) xv]])))
+
+(assert-impl (1 1) 1)
+
+(#bind x "Hello")
+(#bind y "world!")
+assert(Eq "Hello" x)
+assert(Eq "world!" y)
+(assert 1)
+assert(1)
+
+
+;;; define, define-syntax ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind macwrap
+  (#fun pin noinline "macwrap" (macwrap macro ctx uniq globals locals depth form)
+    (0 uniq globals (macro form))))
+
+(#macro define
+  (#fun pin noinline "define" (define _ u g _ _ form)
+    [u g
+      (#let ((sig (_1 form))
+             (body (_2 form)))
+        (Trace ("define" sig body)
+          (If (IsNat sig)
+            ["#bind" sig body]
+            (#let ((nm (_0 sig)))
+              ["#bind" nm
+                ["#fun" "pin" "noinline" (1 nm) sig body]]))))]))
+
+(#macro define-syntax
+  (#fun pin noinline "define-syntax" (define-syntax _ u g _ _ form)
+    (#let ((sig (_1 form))
+           (body (_2 form)))
+      (#let ((nm (_0 sig)))
+        (Trace ("make-def" "#macro" sig body)
+          (Ifz (Eq 2 (Sz sig))
+            error("define-syntax" "bad-sig" form)
+            [u g
+              ["#macro" nm
+                [(1 macwrap)
+                 ["#fun" "pin" "noinline" (1 nm) sig body]]]]))))))
+
+
+;;; Map over an array ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define lcons 0)
+(define CONS 0)
+(define NIL 0)
+
+(define (streamed i end row)
+  (And (Lt i end)
+    (0 (Ix i row) (streamed (Inc i) end row))))
+
+(define (stream row)
+  (streamed 0 (Sz row) row))
+
+(define ~ stream)
+
+(define (lmap f list)
+  (And list
+    [(f (_0 list)) (lmap f (_1 list))]))
+
+(define (map f row)
+  (Row 0 (Sz row) (lmap f (stream row))))
+
+
+;;; Basic Lambda ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind cons
+  (#fun pin noinline "cons" (cons x y)
+    (Weld (0 x) y)))
+
+(define-syntax (lambda form)
+  ["#fun" "nopin" "noinline" (1 0) (cons "_" (_1 form)) (_2 form)])
+
+(define-syntax (pinlambda form)
+  ["#fun" "pin" "noinline" (1 0) (cons "_" (_1 form)) (_2 form)])
+
+(define-syntax (lambdarec form)
+  (#let ((sig (_1 form)))
+    ["#fun" "nopin" "noinline" (1 (_0 sig)) sig (_2 form)]))
+
+(define-syntax (pinlambdarec form)
+  (#let ((sig (_1 form)))
+    ["#fun" "pin" "noinline" (1 (_0 sig)) sig (_2 form)]))
+
+(Unpin lambda)
+(lambda (x) x)
+(lambda (x y) x)
+((lambda (x y) x) 3 4)
+assert(Eq 3 ((lambda       (x y)   x) 3 4))
+assert(Eq 4 ((lambda       (x y)   y) 3 4))
+assert(Eq 3 ((pinlambda    (x y)   x) 3 4))
+assert(Eq 3 ((lambdarec    (f x y) x) 3 4))
+assert(Eq 3 ((pinlambdarec (f x y) x) 3 4))
+assert(Nil ((lambdarec (countdown n)
+            (If (Nil n) 0 (countdown (Dec n)))) 5))
+
+
+;;; Detection Destructuring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (is-brak? x)
+  (And (Nil (IsNat x))
+    (And (Nil (Hd x))
+      (Eq "BRAK" (_0 x)))))
+
+(define (is-juxt-brak? x)
+  (And (Nil (IsNat x))
+    (And (Nil (Hd x))
+      (And (Eq 3 (Sz x))
+        (And (Eq "JUXT" (_0 x))
+          (is-brak? (_2 x)))))))
+
+(define (binding-name b)
+  (If (is-juxt-brak? (_0 b))
+    (_1 (_0 b))
+    (_0 b)))
+
+(define (binding-val b) (_1 b))
+
+;; is-juxt-brak?
+assert(Nil (is-juxt-brak? "x"))
+assert(Nil (is-juxt-brak? 0))
+assert(Nil (is-juxt-brak? '( (f x) )))
+assert(Nil (is-juxt-brak? '( [a b] )))
+assert(is-juxt-brak? '( x[a b] ))
+assert(is-juxt-brak? '( r[a b c] ))
+assert(Nil (is-juxt-brak? '( x(a b) )))
+assert(Nil (is-juxt-brak? '( x{a b} )))
+
+
+;;; List Basics ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (foldr-loop f z row i rem)
+  (Ifz rem z
+    (f (Ix i row)
+      (foldr-loop f z row (Inc i) (Dec rem)))))
+
+(define (foldr f z row)
+  (foldr-loop f z row 0 (Sz row)))
+
+(define (foldr1 f row)
+  (foldr-loop f (Last row) row 0 (Dec (Sz row))))
+
+assert(Eq 5 (foldr Add 1 [0 1 3]))
+assert(Eq 5 (foldr Add 1 [0 1 3]))
+
+
+;;; begin ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (make-local-def sig body acc)
+  (If (IsNat sig)
+    ["#let" [[sig body]] acc]
+    (If (is-juxt-brak? sig)
+      ["let" [[sig body]] acc]
+      (#let ((self (_0 sig)))
+        ["#let" [[self ["lambdarec" sig body]]] acc]))))
+
+(define (is-define? form)
+  (And (Nil (IsNat form))
+    (And (Nil (Hd form))
+      (Eq "define" (_0 form)))))
+
+(define (unblock-step unblock form rest)
+  ;; TODO: proper hygienne here would be to compare binding keys, but
+  ;; we haven't yet included gensyms in bindings.
+  (If (is-define? form)
+    (make-local-def (_1 form) (unblock (drop 2 form)) rest)
+    [(1 Seq) form rest]))
+
+(define (unblock-list unblock l)
+  (Ifz l (1 0)
+    (Ifz (_1 l) (_0 l)
+      (unblock-step unblock (_0 l)
+        (unblock-list unblock (_1 l))))))
+
+(define (unblock forms)
+  (unblock-list unblock (stream forms)))
+
+(define-syntax (begin form)
+  (unblock-list unblock (_1 (stream form))))
+
+assert(Nil (begin))
+
+assert(Eq 5 (begin 5))
+
+assert(Eq 6 (begin 5 6))
+
+assert(Eq 7 (begin
+              (define (foo x y)
+                (print ("x" x))
+                (define (bar z)
+                  (print [x y z])
+                  z)
+                (bar (Add x (Inc y))))
+              (foo 3 3)))
+
+
+;;; Basic Destructuring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (field-binds-step alias fields i acc)
+  (Ifz i acc
+    (#let ((idx (Dec i)))
+      (field-binds-step alias fields idx
+        (cons [(Ix idx fields) ["Ix" (1 idx) alias]] acc)))))
+
+(define (field-binds b)
+  (If (is-juxt-brak? (_0 b))
+    (#let ((alias (_1 (_0 b)))
+           (fields (drop 1 (_2 (_0 b)))))
+      (field-binds-step alias fields (Sz fields) []))
+    []))
+
+assert(Equal
+  [["a" ["Ix" (1 0) "r"]]
+   ["b" ["Ix" (1 1) "r"]]
+   ["c" ["Ix" (1 2) "r"]]]
+  (field-binds [["JUXT" "r" ["BRAK" "a" "b" "c"]] "val"]))
+
+assert(Equal []  (field-binds ["x" "val"]))
+assert(Equal []  (field-binds ["y" (1 3)]))
+
+assert(Equal
+  [["a" ["Ix" (1 0) "r"]]
+   ["b" ["Ix" (1 1) "r"]]
+   ["c" ["Ix" (1 2) "r"]]]
+  (field-binds ['( r[a b c] ) "val"]))
+
+(define (collect-field-binds bindings)
+  (foldr (lambda (b acc) (Weld (field-binds b) acc))
+    [] bindings))
+
+(define (wrap-destructs bindings body)
+  (#let ((fbs (collect-field-binds bindings)))
+    (Ifz (Sz fbs) body
+      ["let" fbs body])))
+
+
+;;; Lambdas with Blocks ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (arg-name pat)
+  (If (is-juxt-brak? pat) (_1 pat)
+    (If (IsNat pat) pat
+      error("arg-nat" "bad" pat))))
+
+(define (arg-field-binds pat)
+  (If (is-juxt-brak? pat)
+    (#let ((alias (_1 pat))
+           (fields (drop 1 (_2 pat))))
+      (field-binds-step alias fields (Sz fields) []))
+    []))
+
+(define (collect-arg-field-binds args)
+  (foldr (lambda (a acc) (Weld (arg-field-binds a) acc))
+    [] args))
+
+(define (wrap-arg-destructs args body)
+  (#let ((fbs (collect-arg-field-binds args)))
+    (Ifz (Sz fbs) body
+      ["let" fbs body])))
+
+(define (make-lambda pinned marked tag self args bodies)
+  ["#fun" pinned marked (1 tag)
+    (cons self (map arg-name args))
+    (wrap-arg-destructs args (unblock bodies))])
+
+(define-syntax (lambda form)
+  (make-lambda "nopin" "noinline" 0 "_" (_1 form) (drop 2 form)))
+
+(define-syntax (pinlambda form)
+  (make-lambda "pin" "noinline" 0 "_" (_1 form) (drop 2 form)))
+
+(define-syntax (lambdarec form)
+  (#let ((sig (_1 form))
+         (body (drop 2 form)))
+    (#let ((args (drop 1 sig))
+           (self (_0 sig)))
+      (make-lambda "nopin" "noinline" self self args body))))
+
+(define-syntax (pinlambdarec form)
+  (#let ((sig (_1 form))
+         (body (drop 2 form)))
+    (#let ((args (drop 1 sig))
+           (self (_0 sig)))
+      (make-lambda "pin" "noinline" self self args body))))
+
+(define foo
+  (pinlambdarec (foo x)
+    (define (bar y) (Add y y))
+    (define xx (bar x))
+    (print ("xx" xx))
+    xx))
+
+assert(Eq 6 (foo 3))
+
+
+;;; define, define-syntax with Blocks ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax (define form)
+  (#let ((sig (_1 form))
+         (bodies (drop 2 form)))
+    (If (IsNat sig)
+      ["#bind" sig (unblock bodies)]
+      (#let ((nm (_0 sig))
+             (args (drop 1 sig)))
+        ["#bind" nm
+          (make-lambda "pin" "noinline" nm nm args bodies)]))))
+
+(define-syntax (define-syntax form)
+  (#let ((sig (_1 form))
+         (bodies (drop 2 form)))
+    (Ifz (Eq 2 (Sz sig))
+      error("define-syntax requires a signature" form)
+      (#let ((nm  (_0 sig))
+             (arg (_1 sig)))
+        ["#macro" nm
+          [(1 macwrap)
+           (make-lambda "pin" "noinline" nm nm [arg] bodies)]]))))
+
+(define (bloop x)
+   (define xx (Add x x))
+   (print xx)
+   xx)
+
+assert(Eq 18 (bloop 9))
+
+
+;;; Lets with Blocks ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax (let1 form)
+  ["#let" [[(_1 form) (_2 form)]] (unblock (drop 3 form))])
+
+(define-syntax (let form)
+  ["#let" (_1 form) (unblock (drop 2 form))])
+
+(define-syntax (let* form)
+  (foldr
+    (lambda (binding acc) ["#let" [binding] acc])
+    (unblock (drop 2 form))
+    (_1 form)))
+
+(define-syntax (letrec1 form)
+  ["#letrec" [[(_1 form) (_2 form)]] (unblock (drop 3 form))])
+
+(define-syntax (letrec form)
+  ["#letrec" (_1 form) (unblock (drop 2 form))])
+
+assert(Eq 3 (let1 x 3 x))
+assert(Eq 7 (let1 x 3 (define y 4) (Add x y)))
+assert(Eq 7 (let ((x 3) (y 4)) (Add x y)))
+assert(Eq 7 (let ((x 3) (y 4)) (define z 0) (Add x y)))
+assert(Eq 7 (let* ((x 3) (y (Add x 1))) (Add x y)))
+assert(Eq 3 (letrec1 f (lambda (x) (If (Nil x) 0 (Inc (f (Dec x))))) (f 3)))
+assert(Eq 1 (letrec ((even (lambda (n) (If (Nil n) 1 (odd (Dec n)))))
+                     (odd  (lambda (n) (If (Nil n) 0 (even (Dec n))))))
+              (even 4)))
+
+
+;;; List Operations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (ltake n list)
+  (And n
+    (And list
+      [(_0 list) (ltake (Dec n) (_1 list))])))
+
+assert(Equal
+  ~[1 2 3 4 5 1 2 3 4 5]
+  (letrec ((a (lcons 1 b))
+           (b (lcons 2 c))
+           (c (lcons 3 d))
+           (d (lcons 4 e))
+           (e (lcons 5 a)))
+    (ltake 10 a))
+)
+
+(define (lmap f l)
+  (And l
+    [(f (Ix0 l)) (lmap f (Ix1 l))]))
+
+(define (map f xs)
+  (Row 0 (Sz xs) (lmap f (stream xs))))
+
+(define (lfoldl f z0 l)
+  (#let ((z1 (f z0 (Ix0 l))))
+    (Ifz l z0
+      (Seq z1
+        (lfoldl f z1 (Ix1 l))))))
+
+(define (lrev xs)
+  (lfoldl (lambda (x y) [y x]) NIL xs))
+
+(define (rev xs)
+  (Row 0 (Sz xs) (lrev (stream xs))))
+
+(define (foldl-loop f row acc i rem)
+  (Seq2 i acc
+    (Ifz rem acc
+      (foldl-loop f row (f acc (Ix i row)) (Inc i) (Dec rem)))))
+
+(define (foldl f z row)
+  (foldl-loop f row z 0 (Sz row)))
+
+(define (lfoldr f z l)
+  (Ifz l z
+    (f (_0 l) (lfoldr f z (_1 l)))))
+
+(define (lfilter f l)
+  (#let ((x (_0 l))
+         (rest (lfilter f (_1 l))))
+    (And l
+      (If (f x) [x rest] rest))))
+
+(define (lany f list)
+  (And list
+    (Or (f (_0 list))
+      (lany f (_1 list)))))
+
+(define (lall-step f x) (Nil (f x)))
+(define (lall f l)      (Nil (lfilter (lall-step f) l)))
+(define (all f xs)      (lall f (stream xs)))
+(define (lweld a b)     (Ifz a b (0 (_0 a) (lweld (_1 a) b))))
+(define (lcat ls)       (lfoldr lweld NIL ls))
+(define (sum xs)        (foldl Add 0 xs))
+(define (lsum xs)       (lfoldl Add 0 xs))
+(define (sum-of f xs)   (lsum (lmap f (stream xs))))
+(define (lcatmap f r)   (lcat (lmap f r)))
+(define (any f row)     (lany f (stream row)))
+(define (cat vs)        (Row 0 (sum-of Sz vs) (lcatmap stream (stream vs))))
+
+
+;;; cond ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (cond-step clause acc)
+  (If (Eq "else" (_0 clause))
+    (_1 clause)
+    ["If" (_0 clause) (_1 clause) acc]))
+
+(define-syntax (cond form)
+  (foldr cond-step (1 0) (drop 1 form)))
+
+(define (trial x)
+  (cond
+    ((Nil x) "zero")
+    ((Eq x 2) "two")
+    (else "something-else")))
+
+assert(Eq "zero"           (trial 0))
+assert(Eq "something-else" (trial 1))
+assert(Eq "two"            (trial 2))
+assert(Eq "something-else" (trial 3))
+assert(Eq "something-else" (trial 4))
+
+;;; Cond with Blocks ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax (cond form)
+  (foldr
+    (lambda (clause acc)
+      (If (Eq "else" (_0 clause))
+        (unblock (drop 1 clause))
+        [(1 If) (_0 clause) (unblock (drop 1 clause)) acc]))
+    (1 0)
+    (drop 1 form)))
+
+assert(Nil       (cond))
+assert(Eq "zero"  (cond ((Nil 0) "zero") (else "other")))
+assert(Eq "other" (cond ((Nil 1) "zero") (else "other")))
+assert(Eq "wild"  (cond ((Nil 1) "no") ((Nil 2) "no") (else "wild")))
+assert(Eq "multi" (cond (else (define x "multi") x)))
+
+
+;;; arbitrary-arity or ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax (or form)
+  (foldr (lambda (x acc) [(1 Or) x acc]) (1 0) (drop 1 form)))
+
+assert(Nil (or))
+assert(Eq 1 (or 1))
+assert(Eq 2 (or 0 2))
+assert(Eq 3 (or 0 0 3))
+assert(Eq 1 (or 1 2 3))
+
+
+;;; Test: Embedded Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define-syntax (quote form[_ x])
+  (1 x))
+
+(quote foo(a.b+c))
+
+(define-syntax (quoted form[_ x])
+  (2 quote x))
+
+(quoted (a b [c]))

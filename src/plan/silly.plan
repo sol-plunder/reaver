@@ -1,0 +1,41 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+(#bind silly "silly")
+
+(#bind a
+  (#pin
+    (#law "a" (a b c)
+      a)))
+
+(#pin
+  (#law "b" (b c d)
+    (a b c d)))
+
+(#pin
+  (#law "c" (c x y)
+    (a c x y)))
+
+;;; (#app 0 1) ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#bind _01 (0 1))
+(#bind _34 (3 4))
+
+(#law 0 (_ a) (_01 a))
+(#law 0 (_ a) (_34 a))
+(#law 0 (_ a) (#(_01) a))
+(#law 0 (_ a) (1 a))
+(#law 0 (_ a) (#(_34) a))
+
+(#bind x
+  (#pin
+    (#law "Conflict" (a b c)
+      a)))
+
+(#bind y
+  (#pin
+    (#law "Conflict" (a b c)
+      b)))
+
+(0 x y)

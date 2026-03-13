@@ -1,0 +1,238 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+; Here we define wrappers for two BPLAN primitives, Ix, and Up.
+;
+; As you can see, the primop ABI is ((<"B"> (opname arg..)))
+
+(#bind Ix
+  (#pin
+    (#law "Ix" (Ix i r)
+      ((#pin "B") ("Ix" i r)))))
+
+(#bind Up
+  (#pin
+    (#law "Up" (() i v r)
+      ((#pin "B") ("Up" i v r)))))
+
+; This is tedious, so we write a macro so that we can automate this
+; boilerplate.
+;
+;     (bplan (Name arg..)) =>
+;
+;       (#bind Name
+;         (#pin
+;            (#law "Name" (Name arg..)
+;              ((#pin B) ("Name" arg..))))
+
+(#macro bplan
+  (#pin
+    (#law "bplan" (bplan e x)
+      sig(Ix 1 x)
+      nam(Ix 0 sig)
+      (0 "#bind" nam
+        (0 "#pin"
+          (0 "#law" (1 nam) sig
+            (0 (1 (#pin "B"))
+              (Up 0 (1 nam) sig))))))))
+
+(bplan (Pin x))
+(bplan (Law a m b))
+(bplan (Elim p l a z m o))
+(bplan (Inc x))
+(bplan (Force x))
+(bplan (Seq a b))
+(bplan (Sap a b))
+(bplan (Sap2 a b c))
+(bplan (Sap3 a b c d))
+(bplan (Sap4 a b c d e))
+(bplan (Sap5 a b c d e f))
+(bplan (Sap6 a b c d e f g))
+(bplan (Sap7 a b c d e f g h))
+(bplan (IsPin x))
+(bplan (IsLaw x))
+(bplan (IsApp x))
+(bplan (IsNat x))
+(bplan (Truth x))
+(bplan (Nil x))
+(bplan (Type x))
+(bplan (Unpin x))
+(bplan (Name x))
+(bplan (Arity x))
+(bplan (Body x))
+(bplan (Init x))
+(bplan (Last x))
+(bplan (If c t e))
+(bplan (Ifz c t e))
+(bplan (Nat x))
+(bplan (Dec x))
+(bplan (Fresh x))
+(bplan (And a b))
+(bplan (Or a b))
+(bplan (Nand a b))
+(bplan (Nor a b))
+(bplan (Add a b))
+(bplan (Sub a b))
+(bplan (Mul a b))
+(bplan (Pow a b))
+(bplan (Bex x))
+(bplan (Eq a b))
+(bplan (Ne a b))
+(bplan (Le a b))
+(bplan (Ge a b))
+(bplan (Lt a b))
+(bplan (Gt a b))
+(bplan (Cmp a b))
+(bplan (Div a b))
+(bplan (Mod a b))
+(bplan (DivMod a b))
+(bplan (Lsh a b))
+(bplan (Rsh a b))
+(bplan (Trunc a b))
+(bplan (Trunc1 a))
+(bplan (Trunc8 a))
+(bplan (Trunc16 a))
+(bplan (Trunc32 a))
+(bplan (Trunc64 a))
+(bplan (Trunc128 a))
+(bplan (Trunc256 a))
+(bplan (Cut x y z))
+(bplan (Wipe x y z))
+(bplan (Edit a b c d))
+(bplan (Bits n))
+(bplan (Test a b))
+(bplan (Set a b))
+(bplan (Clear a b))
+(bplan (Hd x))
+(bplan (Sz v))
+(bplan (Case i r f))      ; TODO: nuke this
+(bplan (Case0  x))        ; case0 = id
+(bplan (Case1  x else))   ; case1 = seq
+(bplan (Case2  x a else)) ; case2 = if
+(bplan (Case3  x a b else))
+(bplan (Case4  x a b c else))
+(bplan (Case5  x a b c d else))
+(bplan (Case6  x a b c d e else))
+(bplan (Case7  x a b c d e f else))
+(bplan (Case8  x a b c d e f g else))
+(bplan (Case9  x a b c d e f g h else))
+(bplan (Case10 x a b c d e f g h i else))
+(bplan (Case11 x a b c d e f g h i j else))
+(bplan (Case12 x a b c d e f g h i j k else))
+(bplan (Case13 x a b c d e f g h i j k l else))
+(bplan (Case14 x a b c d e f g h i j k l m else))
+(bplan (Case15 x a b c d e f g h i j k l m n else))
+(bplan (Case16 x a b c d e f g h i j k l m n o else))
+(bplan (Coup x o))
+(bplan (Up i v r))
+(bplan (UpUniq i v r))
+(bplan (Ix i r))
+(bplan (Ix0 r))
+(bplan (Ix1 r))
+(bplan (Ix2 r))
+(bplan (Ix3 r))
+(bplan (Ix4 r))
+(bplan (Ix5 r))
+(bplan (Ix6 r))
+(bplan (Ix7 r))
+(bplan (Rep a b c))
+(bplan (Row a b c))
+(bplan (Weld a b))
+(bplan (Slice o n r))
+(bplan (Copy a b c d e))
+(bplan (Switch a b c d))
+(bplan (Bytes s))
+(bplan (Load o w n))
+(bplan (Erase o w n))
+(bplan (Store o w v n))
+(bplan (Splice i o n s b))
+(bplan (Nib i n))
+(bplan (Load8 o n))
+(bplan (Load16 o n))
+(bplan (Load32 o n))
+(bplan (Load64 o n))
+(bplan (Store8 o v n))
+(bplan (Store16 o v n))
+(bplan (Store32 o v n))
+(bplan (Store64 o v n))
+(bplan (RefEq a b))
+(bplan (CopyUniq a b c d e))
+(bplan (Snore a b c d e))
+(bplan (Try f x))
+(bplan (Throw e))
+(bplan (Seq2 a b c))
+(bplan (Seq3 a b c d))
+(bplan (Seq4 a b c d e))
+(bplan (Seq5 a b c d e f))
+(bplan (DeepSeq x y))
+(bplan (Trace x y))
+(bplan (Save pin))
+
+
+;;; RPLAN is for REPLs ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#macro rplan
+  (#pin
+    (#law "rplan" (rplan e x)
+      sig(Ix 1 x)
+      nam(Ix 0 sig)
+      (0 "#bind" nam
+        (0 "#pin"
+          (0 "#law" (1 nam) sig
+            (0 (1 (#pin "R"))
+              (Up 0 (1 nam) sig))))))))
+
+(rplan (Input bytes))
+(rplan (Output bytes))
+(rplan (Warn bytes))
+(rplan (ReadFile filename))
+(rplan (Print val))
+(rplan (Stamp path))
+(rplan (Now _))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#macro bind-value
+  (#pin
+    (#law "bind-value" (bind-value e x)
+      (0 "#bind" (Ix1 x) (Ix2 x)))))
+
+; (defun (name args..) body) =>
+;
+;     (def name (#pin (law (name args..) body)))
+
+(bind-value bind-function
+  (#pin
+    (#law "bind-function" (bind-function isMacro e x)
+      sigS(Ix 1 x)
+      nmS(Ix 0 sigS)
+      restS(Slice 2 (Sz x) x)
+      nm(If (IsNat nmS) nmS (Ix 0 nmS))
+      sig(Up 0 nm sigS)
+      expr(0 "#pin" (Weld (0 "#law" (1 nm) sig) restS))
+      (0 (If isMacro "#macro" "#bind") nm expr))))
+
+(bind-function 0 0 (0 "defun" (0 "f" "x") "x"))
+
+(#macro defun    (bind-function 0))
+(#macro defmacro (bind-function 1))
+
+(defun (print x)
+  (Trace x x))
+
+; x(y) => (JUXT x y) => (x y)
+
+(defmacro (JUXT e x)
+  (0 (Ix 1 x) (Ix 2 x)))
+
+print(3)
+
+(#macro defval bind-value)
+(#macro =      bind-value)
+(#macro def    bind-value)
+
+(defun (Error e)
+  (Trace ("Error" e)
+    (Throw e)))

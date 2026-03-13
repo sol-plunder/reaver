@@ -1,0 +1,320 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+;;;; QuasiQuotation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;
+;; The reader doesn't have special support for quotation marks, only
+;; juxtaposition, so we need to add these ourselves.
+;;
+;; First, symbols which start with certain marks are parsed out:
+;;
+;;     'x    becomes (quote x)
+;;     ,x    becomes (unquote (x))
+;;     ,@x   becomes (unquote-splicing (x))
+;;     ',x   becomes (quote ,x)
+;;
+;; Juxtaposed forms which begine with these marks are also parsed out:
+;;
+;;     '(..) becomes  (quote (x))
+;;     'x(..) becomes (quote x(..))
+;;     'x".." becomes (quote x"..")
+;;
+;;     [etc for , and ,@]
+;;
+;; **Reader level**: The reader doesn't know about quasiquote semantics. It
+;; just does mechanical things with prefix characters. A backtick, comma,
+;; or comma-at on a symbol becomes part of the symbol: `` `foo `` →
+;; `"\`foo"`,`,bar`→`",bar"`,`,@xs`→`",@xs"`. When these prefixes
+;; are followed by a compound form, the reader produces a JUXT:`,(Inc
+;; 3)`→`(JUXT "," (Inc 3))`. The reader also handles brackets:`\[a
+;; b\]`→`(BRAK a b)`. And juxtaposition of a symbol with brackets:`a\[b
+;; c\]`→`(JUXT "a" (BRAK b c))\`.
+;;
+;; **Byte detection**: Since the reader bakes the prefix into the symbol,
+;; we detect commas by checking the first byte of the nat:
+;; `Load8 0 sym == 44` (ASCII comma). Splice adds `Load8 1 sym == 64`
+;; (ASCII @). We strip prefixes with `Rsh` --- shifting right by 8 bits
+;; drops one byte, 16 drops two.
+;;
+;; **JUXT handling**: When `qq-element` sees a JUXT form, `qq-juxt-prefix`
+;; checks the prefix: exact `","` means compound unquote (the body is the
+;; expression), exact `",@"` means compound splice, `",sym"` means the user
+;; wrote `,sym(args)` so we strip the comma and rebuild the JUXT as the
+;; unquoted expression. Non-comma JUXT (like quote) falls through to
+;; regular form processing.
+;;
+;; **The Compiled ADT**: Each element compiles to one of three tags:
+;;
+;; - `CConst` (0): fully constant, no dynamic content anywhere beneath
+;;
+;; - `CExpr` (1): produces a single dynamic value
+;;
+;; - `CSplice` (2): produces a row to be spliced into the parent
+;;
+;; The key insight is that this tag propagates upward. When `qq-form`
+;; processes a row's children, it inspects the tags to decide which of
+;; three strategies to use.
+;;
+;; **Three compilation strategies for rows**:
+;;
+;; 1.  All children are `CConst` → the whole row is constant, return
+;;     `CConst` of the original row. No code generated at all.
+;;
+;; 2.  Some `CExpr` but no `CSplice` → fixed-size row. Emit
+;;     `(0 child1 child2 ...)` where constants become `(1 val)` and
+;;     expressions pass through. This is `mk-row`.
+;;
+;; 3.  Any `CSplice` present → unknown size. Group consecutive non-splice
+;;     elements into fixed-row chunks, leave splices as-is, then combine
+;;     with `weld` (two chunks) or `cat` (three or more).
+;;
+;; **The grouping algorithm**: `group-by-splice` walks with a left fold,
+;; accumulating non-splice elements. When it hits a splice, it flushes the
+;; accumulated elements as a fixed row chunk, emits the splice expression,
+;; and starts a new accumulator. At the end, any remaining accumulator gets
+;; flushed.
+;;
+;; **Constant optimization**: The all-constant case is important because
+;; most quasiquoted forms are mostly constant. `` `(define x 3) `` has no
+;; commas --- it's entirely constant and becomes just
+;; `(1 (0 "define" "x" (1 3)))`. No runtime row construction at all. The
+;; optimization propagates recursively --- a nested constant form
+;; contributes `CConst` to its parent, and if the parent is also
+;; all-constant, the whole tree collapses to a single constant.
+;
+;;; ============================================================
+;;; Types
+;;; ============================================================
+;;;
+;;; SExpr (input) — the raw S-expression from the reader:
+;;;   SNat  = Nat                    -- bare nat/symbol
+;;;   SVal  = (1 Any)                -- tagged value
+;;;   SApp  = (0 SExpr ...)          -- application/row
+;;;
+;;; Reaver (output) — S-expressions to be compiled by Reaver:
+;;;   same representation as SExpr, but semantically different
+;;;
+;;; Compiled — result of processing one element:
+;;;   CConst  = (0 SExpr)            -- fully constant
+;;;   CExpr   = (1 Reaver)            -- dynamic, single value
+;;;   CSplice = (2 Reaver)            -- dynamic, row to splice
+;
+;;; ============================================================
+;;; Byte prefix detection : Nat -> Bool
+;;; ============================================================
+;
+;(define (has-comma? sym)
+;  (And (IsNat sym) (Eq 44 (Load8 0 sym))))
+;
+;(define (has-splice-prefix? sym)
+;  (And (has-comma? sym) (Eq 64 (Load8 1 sym))))
+;
+;;; strip-comma : Nat -> Nat
+;(define (strip-comma sym) (Rsh sym 8))
+;
+;;; strip-splice : Nat -> Nat
+;(define (strip-splice sym) (Rsh sym 16))
+;
+;assert(Eq 1 (has-comma? ",x"))
+;assert(Eq 0 (has-splice-prefix? ",x"))
+;assert(Eq 1 (has-splice-prefix? ",@x"))
+;assert(Eq "x" (strip-splice ",@x"))
+;
+;
+;;; ============================================================
+;;; Compiled accessors
+;;; ============================================================
+;
+;(define CConst 0)
+;(define CExpr 1)
+;(define CSplice 2)
+;
+;;; compiled-is-const : Compiled -> Bool
+;(define (compiled-is-const? c) (Eq 0 (Hd c)))
+;
+;;; compiled-is-splice : Compiled -> Bool
+;(define (compiled-is-splice? c) (Eq 2 (Hd c)))
+;
+;;; compiled-payload : Compiled -> SExpr | Reaver
+;(define (compiled-payload c) (.0 c))
+;
+;;; ============================================================
+;;; to-reaver : Compiled -> Reaver
+;;; Convert a non-splice Compiled into a Reaver expression.
+;;; ============================================================
+;
+;(define (to-reaver c)
+;  (cond
+;    ((compiled-is-const? c)  (1 (compiled-payload c)))
+;    ((compiled-is-splice? c) (Error "splice outside template"))
+;    (else                    (compiled-payload c))))
+;
+;;; ============================================================
+;;; mk-row : Row Reaver -> Reaver
+;;; Build a row-construction expression.
+;;; ============================================================
+;
+;(define (mk-row ws)
+;  (cons (1 0) ws))
+;
+;;; ============================================================
+;;; qq-element : SExpr -> Compiled
+;;; Process a single S-expression element.
+;;; ============================================================
+;
+;(define (is-expr? x)
+;  (Nil (Hd x)))
+;
+;;; ============================================================
+;;; group-by-splice : Row Compiled -> Row Reaver
+;;; Group elements into chunks separated by splices.
+;;; Non-splice runs become fixed rows, splices pass through.
+;;; ============================================================
+;
+;(define (flush-acc acc)
+;  (If (Nil acc) []
+;    [(mk-row (map to-reaver (rev acc)))]))
+;
+;(define (gbs-step state[acc out] c)
+;  (If (compiled-is-splice? c)
+;    [[] (Weld out (Weld (flush-acc acc) [(compiled-payload c)]))]
+;    [(cons c acc) out]))
+;
+;(define (group-by-splice cs)
+;  (define final[facc fout] (foldl gbs-step [[] []] cs))
+;  (Weld fout (flush-acc facc)))
+;
+;;; ============================================================
+;;; compile-template : Row Compiled -> Reaver
+;;; Handle a row that contains splices.
+;;; ============================================================
+;
+;(define (compile-template cs)
+;  (define chunks[c1 c2] (group-by-splice cs))
+;  (Case3 (Dec (Sz chunks))
+;    c1
+;    [(1 Weld) c1 c2]
+;    [(1 cat) (mk-row chunks)]))
+;
+;;; is-juxt? : SExpr -> Bool
+;(define (is-juxt? x)
+;  (And (is-expr? x)
+;    (And (Eq 3 (Sz x))
+;      (Eq "JUXT" (.0 x)))))
+;
+;;; qq-juxt-prefix : Nat -> SExpr -> Compiled | 0
+;;; Handle JUXT forms with comma/splice prefixes.
+;;; Returns 0 if the prefix is not a comma form.
+;(define (qq-juxt-prefix prefix body)
+;  (cond
+;    ((Eq "," prefix)            (CExpr body))
+;    ((Eq ",@" prefix)           (CSplice body))
+;    ((has-splice-prefix? prefix)
+;      (CSplice ["JUXT" (strip-splice prefix) body]))
+;    ((has-comma? prefix)
+;      (CExpr ["JUXT" (strip-comma prefix) body]))
+;    (else                       0)))
+;
+;(define (qq-element x)
+;  (define (qq-form elems)
+;    (define cs (map qq-element elems))
+;    (cond
+;      ((all compiled-is-const? cs)  (CConst elems))
+;      ((any compiled-is-splice? cs) (CExpr (compile-template cs)))
+;      (else                         (CExpr (mk-row (map to-reaver cs))))))
+;
+;  (cond
+;    ((is-juxt? x)
+;      (let1 result (qq-juxt-prefix (.1 x) (.2 x))
+;        (If result result (qq-form x))))
+;    ((has-splice-prefix? x) (CSplice (strip-splice x)))
+;    ((has-comma? x)         (CExpr (strip-comma x)))
+;    ((is-expr? x)           (qq-form x))
+;    (else                   (CConst x))))
+;
+;assert(planEq (CExpr "a")        (qq-element '( ,a    )))
+;assert(planEq (CSplice "a")      (qq-element '( ,@a   )))
+;assert(planEq (CConst "a")       (qq-element '( a     )))
+;assert(planEq (CConst ["a"])     (qq-element '( (a)   )))
+;assert(planEq (CConst ["a" "b"]) (qq-element '( (a b) )))
+;
+;assert(planEq (CExpr '((0 "a" b)))
+;              (qq-element '( (a ,b) )))
+;
+;assert(planEq (CExpr "xs")
+;              (qq-element '( (,@xs) )))
+;
+;assert(planEq (CExpr [(1 Weld) "xs" "ys"])
+;              (qq-element '( (,@xs ,@ys) )))
+;
+;assert(planEq (CExpr [ (1 Weld) '((0 "a")) '(b) ])
+;              (qq-element '( (a ,@b) )))
+;
+;assert(planEq (CExpr [(1 cat) [(1 0) '((0 "a" "b")) "c" '((0 "d" "e"))]])
+;              (qq-element '( (a b ,@c d e) )))
+;
+;  ;; JUXT: ,(expr) → compound unquote
+;assert(planEq (CExpr '((Inc 3)))
+;              (qq-element '( ,(Inc 3) )))
+;
+;  ;; JUXT: ,@(expr) → compound splice
+;assert(planEq (CSplice '((foo bar)))
+;              (qq-element '( ,@(foo bar) )))
+;
+;  ;; JUXT: ,sym(args) → unquote of rebuilt JUXT
+;assert(planEq (CExpr ["JUXT" "a" '((3))])
+;              (qq-element '( ,a(3) )))
+;
+;  ;; JUXT: ,@sym(args) → splice of rebuilt JUXT
+;assert(planEq (CSplice ["JUXT" "a" '((3))])
+;              (qq-element '( ,@a(3) )))
+;
+;;; ============================================================
+;;; qq-compile : SExpr -> Reaver
+;;; Top-level entry point.
+;;; ============================================================
+;
+;(define (qq-compile form)
+;  (to-reaver (qq-element form)))
+;
+;assert(planEq "a"                (qq-compile '( ,a    )))
+;assert(planEq "a"                (qq-compile '( (,@a) )))
+;assert(planEq (1 ["a"])          (qq-compile '( (a)   )))
+;assert(planEq (1 ["a" "b"])      (qq-compile '( (a b) )))
+;
+;assert(planEq '((0 "a" b))
+;              (qq-compile '( (a ,b) )))
+;
+;assert planEq ( [(1 Weld) "xs" "ys"]
+;                (qq-compile '( (,@xs ,@ys) )))
+;
+;assert planEq ( [ (1 Weld) '((0 "a")) '(b) ]
+;                (qq-compile '( (a ,@b) )))
+;
+;assert planEq ( [(1 cat) [(1 0) '((0 "a" "b")) "c" '((0 "d" "e"))]]
+;                (qq-compile '( (a b ,@c d e) )))
+;
+;(define-syntax (` env form)
+;  (to-reaver (qq-element (.1 form))))
+;
+;(define a "x")
+;(define b "y")
+;(define c "z")
+;
+;(define as ["a" "a" "a"])
+;(define bs ["b" "b"])
+;(define cs ["c"])
+;
+;(define val 1)
+;
+;assert(planEq '( (x)         )  `(,a)             )
+;assert(planEq '(  x          )  `(,@a)            )
+;assert(planEq '( (a)         )  `(a)              )
+;assert(planEq '( (a b)       )  `(a b)            )
+;assert(planEq '( (a y)       )  `(a ,b)           )
+;assert(planEq '( (a a a b b) )  `(,@as ,@bs)      )
+;assert(planEq '( (a b b)     )  `(a ,@bs)         )
+;assert(planEq '( (a b c d e) )  `(a b ,@cs d e)   )
+;assert(planEq '( (a 4)       )  `(a ,(1 (Inc 3))) )
+;assert(planEq '( (a 4)       )  `(a ,val(Inc 3))  )

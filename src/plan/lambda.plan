@@ -1,0 +1,765 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@codegen
+
+;;;; Lambda Compiler
+;;;; ===============
+;;;;
+;;;; The language of functions provided by PLAN itself is extremely
+;;;; bare-bones.  There are no nested functions, and each function
+;;;; contains only one top-level letrec binding.
+;;;;
+;;;; This is a compiler from a more expressive lambda-calculus like
+;;;; language to PLAN.  It supports:
+;;;;
+;;;; -   Nested let bindings.
+;;;;
+;;;; -   Non-recursive let bindings (names are shadowed instead of
+;;;;     recursion).
+;;;;
+;;;; -   Nested lambdas (via lambda lifting)
+;;;;
+;;;; -   Inlining (but only where specifically requested).
+;;;;
+;;;; Furthermore, we perform some basic optimizations:
+;;;;
+;;;; -   Unused let bindings are eliminated.
+;;;;
+;;;; -   Single-use let bindings are eliminated (inlined into the
+;;;;     expression).
+;;;;
+;;;;     -   However, single-use let bindings are *not* eliminated if
+;;;;         the only reference comes from a nested lambda, since this
+;;;;         could affect how many times the expression is evaluated.
+;;;;
+;;;; -   Let bindings which bind small constants are eliminated (we can
+;;;;     instead directly rely on sharing).
+;;;;
+;;;; -   Let bindings which trivially rebind another let binding are
+;;;;     eliminated, as they contribute nothing to the result except
+;;;;     runtime overhead.
+;;;;
+;;;; These basic optimizations (and inlining) mean that you can write
+;;;; code in a more natural style without generating bad PLAN code.
+;;;;
+;;;; It is important to understand that these optimizations do not affect
+;;;; performance.  The PLAN runtime backend will perform all of these
+;;;; optimizations and much more.  The purpose here is code *size* and
+;;;; *canonicity*.  This compiler is designed so that you can write
+;;;; expressions while having very specific PLAN output in mind — this
+;;;; is critical for jet definitions, where the runtime recognizes
+;;;; specific canonical law shapes and replaces them with optimized
+;;;; native code.  The optimizer must be deterministic and predictable:
+;;;; the same input must always produce the same output.  This is why
+;;;; we avoid "smart" optimizations that might fire differently depending
+;;;; on context — it would be very strange if canonical jet definitions
+;;;; contained dead code or redundant bindings.
+;;;;
+;;;; But an even more important reason is that using the macro system
+;;;; for meta-programming tends to generate a lot of pointless bindings
+;;;; and single-use bindings, and having those concerns be taken care of
+;;;; by a basic optimizer significantly increases the utility of
+;;;; meta-programming.
+;;;;
+;;;; Oh, and these optimizations are also necessary for inlining too,
+;;;; since inlining will convert each argument into a let binding,
+;;;; and these arguments may be used only once (or not at all).
+;;;; Without basic optimization, the resulting code would be very silly.
+;;;;
+;;;; This compiler code will be used for two different things:
+;;;;
+;;;; 1.  Right away within Wisp, to extend the syntax of the defun,
+;;;;     lambda, and CURL ({a -> b}) macros with additional
+;;;;     expressiveness.
+;;;;
+;;;; 2.  As a foundational component of the Sire language, which is built
+;;;;     using Wisp.
+;;;;
+;;;; The inlining support is multi-step, as inlining a function can
+;;;; expose additional opportunities for inlining.  In order to inline
+;;;; global bindings, we will need not just the PLAN value of the binding,
+;;;; but also the expression that was used to create it.
+;;;;
+;;;; Sire always tracks this information.  In Wisp, we can simply add
+;;;; the information to the end of each binding, and replace the =defun=
+;;;; macro with a new version which includes this information.
+;;;;
+;;;;
+;;;; Pipeline
+;;;; --------
+;;;;
+;;;; The compiler has two intermediate representations and four passes.
+;;;;
+;;;; The input IR (AST) is a rich lambda calculus with nested lambdas,
+;;;; let/letrec bindings, global references, and inline marks.  All
+;;;; variable references use de Bruijn indices.  We use de Bruijn in
+;;;; part because we store input expressions in global bindings for
+;;;; later inlining, and we don't want to have to renumber them every
+;;;; time they are inlined into a new context.  De Bruijn also makes
+;;;; lambda lifting very straightforward.
+;;;;
+;;;; The output IR (Code) is a partial law-like representation: just
+;;;; constants (VAL), variable references (VAR, now keyed by unique
+;;;; integers rather than de Bruijn indices), and applications (APP).
+;;;; Nested lambdas and let/letrec structure have been eliminated.
+;;;; Code exists as a stopping point on the way to actual PLAN laws,
+;;;; providing a representation that facilitates optimizations like
+;;;; dead binding elimination and single-use inlining.  We use unique
+;;;; keys here instead of de Bruijn because they make it easy to count
+;;;; references.
+;;;;
+;;;; A Fun struct wraps a Code body together with a flat table of all
+;;;; its bindings and the metadata needed for code generation.
+;;;;
+;;;; Lambda lifting is interleaved with compilation to laws.  When we
+;;;; encounter a nested lambda during ingestion, we recursively compile
+;;;; it all the way to a PLAN law, then embed it as a constant (applied
+;;;; to its free variables if lambda-lifted).  This means that by the
+;;;; time we compile any given law, all of its sub-laws are already
+;;;; compiled constants.  This is an unusually clean pattern: there is
+;;;; no need to maintain a separate table of emitted functions as state,
+;;;; because we can just create the function in the middle of compilation
+;;;; and embed it directly.
+;;;;
+;;;;     AST                     Input IR
+;;;;       |
+;;;;       | inline              Expand marked function calls in place.
+;;;;       |                     De Bruijn renumbering keeps indices
+;;;;       |                     correct as code is moved between
+;;;;       v                     nesting depths.
+;;;;     AST                     Same IR, marks consumed
+;;;;       |
+;;;;       | ingest              Flatten let/letrec into a binding table
+;;;;       |                     keyed by unique integers.  Compile nested
+;;;;       |                     lambdas recursively (interleaved lambda
+;;;;       |                     lifting).  Fold constant partial apps.
+;;;;       v                     Inline constants and trivial aliases.
+;;;;     Fun (Code)              Flat IR with binding table
+;;;;       |
+;;;;       | analyse             Count references to each binding.
+;;;;       |
+;;;;       v
+;;;;     Fun + refcounts
+;;;;       |
+;;;;       | codegen             Emit a PLAN law.  Generate a let-chain
+;;;;       |                     for multi-use bindings.  Inline
+;;;;       v                     single-use bindings at reference site.
+;;;;     PLAN value
+
+;;;; Data Types
+;;;; ----------
+;;;;
+;;;; Entry is a global binding as seen by the compiler.  It carries the
+;;;; binding's name, its compiled value, and the original expression that
+;;;; produced it.  The expression is retained so that the inliner can
+;;;; re-examine it when deciding whether to inline a call to this binding.
+;;;; Building Entry into the AST makes the representation orthogonal to
+;;;; the specifics of the environment representation — the compiler does
+;;;; not need to know how the frontend organizes its bindings.
+;;;;
+;;;; AST is the input IR.  All variable references use de Bruijn indices.
+;;;; The M (mark) constructor requests that the inliner try to expand the
+;;;; enclosed expression.  The F constructor wraps a nested lambda, whose
+;;;; fields are unpacked into a Function struct.
+;;;;
+;;;; The =lam-pinned= flag on Function deserves special mention.  We
+;;;; cannot simply pin the lambda expression after compilation, because
+;;;; lambda lifting may add extra arguments (the captured free variables).
+;;;; We want to pin only the actual law, not the partially-applied result
+;;;; with its lambda-lifted arguments.  That is why this flag flows all
+;;;; the way down to the lowest level of the compiler, so that =codegen=
+;;;; can pin the raw law before the free variables are applied.
+;;;;
+;;;; During inlining, the compiler tracks the "inlining potential" of each
+;;;; expression.  An Arg records a function argument that has been collected
+;;;; but not yet applied: the depth at which the argument was captured (so
+;;;; that free variables can be renumbered when pasting it into a different
+;;;; context) and the argument's expression.  A Pot records a function
+;;;; that we may be able to inline: the function itself, whether an inline
+;;;; mark has been seen, the depth at which the function was encountered,
+;;;; how many more arguments are needed before we can expand, and the
+;;;; arguments collected so far.  A Res is the result of one step of the
+;;;; inlining pass: the transformed expression paired with its inlining
+;;;; potential (if any).
+
+;;; Compiler
+;;; --------
+;;;
+;;; Once inlining is done, we translate the AST into PLAN laws.
+;;; This is done in three passes: ingestion, analysis, and code
+;;; generation.
+;;;
+;;; The output IR (Code) is much simpler than the input.  It has only
+;;; three constructors: VAL for constants, VAR for variable references,
+;;; and APP for function application.  There are no nested lambdas, no
+;;; let/letrec structure, and no marks or globals.
+;;;
+;;; Variable references in Code use unique integer keys rather than
+;;; de Bruijn indices.  Each let binding gets a fresh key during
+;;; ingestion, so references are unambiguous regardless of scoping
+;;; depth.
+;;;
+;;; A Fun struct packages a Code body together with all of the metadata
+;;; needed for code generation: the function name, self-reference key,
+;;; argument keys, and a flat table mapping binding keys to their Code
+;;; values.
+;;;
+;;; The =union-switch= macro dispatches on the head tag of a tagged
+;;; union (as produced by =deftype=).  It exists as a simple pattern
+;;; because it is easy to implement as a macro and makes dispatch code
+;;; somewhat readable.  Building this without *any* case dispatch is
+;;; not a good idea, but building a more complex =Case= before lambdas
+;;; is unrealistically difficult (you need lexical scope to implement
+;;; lexical scope).
+
+;;; The R (letrec) node lays out its bindings as if they were a chain
+;;; of nested lets: the first binding is outermost (farthest from the
+;;; body, highest de Bruijn index) and the last binding is innermost
+;;; (closest to the body, index 0).  This matches the behavior of
+;;; chained LL nodes.  The difference from LL is that all bindings
+;;; are in scope in all values, not just in later ones.
+
+(defval GlobalFlag 0)
+(defval MacroFlag 1)
+(defval LocalFlag 2)
+
+; data Entry = ENTRY     ;  Global Binding (BST Node)
+;   { bind-key  :: Nat   ;    Name
+;   , bind-val  :: Any   ;    Compiled value
+;   , bind-flag :: Flag  ;    GlobalFlag | MacroFlag | LocalFlag
+;   , bind-expr :: AST   ;    Source expression (retained for inlining)
+;   }
+
+(defval ENTRY 0)
+(defval .bind-key  Ix0) (defval =bind-key  (Up 0))
+(defval .bind-val  Ix1) (defval =bind-val  (Up 1))
+(defval .bind-flag Ix2) (defval =bind-flag (Up 2))
+(defval .bind-expr Ix3) (defval =bind-expr (Up 3))
+
+; data AST                     ; Input IR (rich lambda calculus)
+;   = V Nat                    ;   Local reference (de Bruijn index)
+;   | K Any                    ;   Constant value
+;   | G Entry                  ;   Global reference
+;   | A AST AST                ;   Function application
+;   | L AST AST                ;   Let binding (value, body)
+;   | R (Row AST) AST          ;   Recursive let binding (bindings, body)
+;   | M AST                    ;   Inline mark (request inlining)
+;   | F (Unpack Function)      ;   Nested lambda expression
+
+(defval V 0)
+(defval K 1)
+(defval G 2)
+(defval A 3)
+(defval L 4)
+(defval R 5)
+(defval M 6)
+(defval F 7)
+
+; (defstruct Function FL       ; Lambda Expression
+;   (lam-pinned Bit)           ;   Pin the raw law? (not the lifted result)
+;   (lam-marked Bit)           ;   Should we always attempt to inline this?
+;   (lam-recur  Bit)           ;   Is this recursive? (cannot inline if so)
+;   (lam-name   Nat)           ;   PLAN law name metadata
+;   (lam-arity  Nat)           ;   Number of arguments
+;   (lam-body   AST))          ;   The function body
+
+(defval FUNCTION 0)
+(defval .lam-pinned Ix0) (defval lam-pinned= (Up 0))
+(defval .lam-marked Ix1) (defval lam-marked= (Up 1))
+(defval .lam-recur  Ix2) (defval lam-recur=  (Up 2))
+(defval .lam-name   Ix3) (defval lam-name=   (Up 3))
+(defval .lam-arity  Ix4) (defval lam-arity=  (Up 4))
+(defval .lam-body   Ix5) (defval lam-body=   (Up 5))
+
+;; =planArity= computes the remaining arity of a PLAN value.  For
+;; partially applied functions (apps), it peels back one application
+;; at a time, decrementing the arity.  This is used by =folding-apply=
+;; to determine whether a compile-time application would be partial
+;; (safe to fold) or saturated (would execute, so must be left as code).
+
+(patfun (pinArity x)
+  i(Unpin x)
+  (If (IsLaw i)
+    (Arity i)
+    1))
+
+(patfun (planArity x)
+  (Case4 (Type x)
+    0
+    (pinArity x)
+    (Arity x)
+    (Dec (planArity (Init x)))))
+
+;; =folding-apply= performs a function application at compile time,
+;; if the application is partial (remaining arity > 1).  A saturated
+;; application (arity = 1) would actually execute the function, so we
+;; leave it as an APP node in the Code IR.  This optimization results
+;; in slightly smaller laws.
+
+(patfun (is-constant-app f x)
+  (And (And (Eq VAL (Hd f)) (Eq VAL (Hd x)))
+    (Ne 1 (planArity (.0 f)))))
+
+(patfun (folding-apply f[fv] x[xv])
+  (If (is-constant-app f x)
+    (VAL (fv xv))
+    (APP f x)))
+
+(tests
+  1(is-constant-app (VAL 1) (VAL 2))
+  1(is-constant-app (VAL const) (VAL 2))
+  0(is-constant-app (VAL id) (VAL 2))
+  0(is-constant-app (VAR 0) (VAL 2)))
+
+(tests
+  ( (VAL (1 2))             (folding-apply (VAL 1) (VAL 2))     )
+  ( (VAL (const 2))         (folding-apply (VAL const) (VAL 2)) )
+  ( (APP (VAL id) (VAL 2))  (folding-apply (VAL id) (VAL 2))    ))
+
+;;; Ingestion
+;;; ---------
+;;;
+;;; Ingestion transforms the AST into the flat Code/Fun representation.
+;;; The key idea is that nested let/letrec bindings are flattened into a
+;;; single table, with each binding assigned a unique integer key.  The
+;;; body becomes a tree of VAL/VAR/APP nodes.
+;;;
+;;; When ingestion encounters a nested lambda, it recursively runs the
+;;; full compiler on it, producing a PLAN constant.  If the lambda
+;;; references free variables from the enclosing scope, lambda lifting
+;;; adds those as extra arguments, and the result is a constant applied
+;;; to one or more variable references.
+;;;
+;;; As an optimization, ingestion folds constant partial applications
+;;; at compile time (via =folding-apply=) and inlines bindings that are
+;;; constants or trivial aliases directly into the scope, rather than
+;;; adding them to the binding table.  This means that when we later
+;;; encounter a reference to such a binding, we get the value directly
+;;; instead of generating an extra let binding in the output.
+;;;
+;;; The ingestion state is a pair [env nex] where env is the binding
+;;; table (balanced tree of key -> Code) and nex is the next unused key.
+
+;; =ingest-mark= does nothing, we just ignore the mark.
+
+(patfun (ingest-mark ingest compile s env [x])
+  (ingest compile s x env))
+
+;; =ingest-local= just translates the reference into the new
+;; representation (unique key per binding) by indexing into a stack.
+
+(patfun (ingest-local ingest compile s env [i])
+  [env (lix-error "ingest-local" i s)])
+
+;; =ingest-global= just produces a constant.
+
+(patfun (ingest-global ingest compile s env [g])
+  [env (VAL (.bind-val (Unpin g)))])
+
+;; =ingest-constant= just produces a constant.
+
+(patfun (ingest-constant ingest compile s env [x])
+  [env (VAL x)])
+
+;; =ingest-apply= ingests the function and the argument and then
+;; either applies them right away (if it is a constant partial
+;; application), or produces an application expression.
+
+(patfun (ingest-apply ingest compile s env0 [f_ x_])
+  {[env1 f] = (ingest compile s f_ env0)}
+  {[env2 x] = (ingest compile s x_ env1)}
+  [env2 (folding-apply f x)])
+
+; appending to arrays and resizing arrays
+
+(patfun (resize n array)
+  (Row 0 n (stream array)))
+
+(patfun (snoc xs x)
+  (xs x))
+
+(tests
+  ( [0 0 0 0 0]  (resize 5 0)       )
+  ( [1 2 3 0 0]  (resize 5 [1 2 3]) )
+  ( [1 2 3 4]    (snoc [1 2 3] 4)   )
+  ( [4]          (snoc 0       4)   ))
+
+;; =ingest-let= ingests the binding first.
+;;
+;; If it is an application, then we add the binding to the table of
+;; all bindings, adds a reference to this binding to the scope, and then
+;; ingests the body in the context of that scope.
+;;
+;; If the things being bound is a constant or a trivial alias, we do
+;; *not* include the result in the table of bindings, and we instead
+;; directly add the expression to the scope.
+;;
+;; By adding the expression to the scope, it will be inlined into the
+;; reference site instead of being preserved as a let binding.
+;;
+;; TODO: Currently only APP-shaped values get bindings; everything else
+;; is inlined as an alias.  This duplicates large constants (strings,
+;; bytearrays, big tables) at every reference site.  The rule should be:
+;; aliases are pins, nats below 2^64, and VARs.  Everything else (laws,
+;; app nodes, large nats) should get a let binding.  The 2^64 threshold
+;; separates small constants/keywords from encoded data — a nat that
+;; fits in a machine word is a literal you'd write in source; anything
+;; larger is almost certainly a string or packed structure that deserves
+;; a name.
+
+(patfun (ingest-let ingest compile s env0 [v b])
+  {iletout[env1 vr] = (ingest compile s v env0)}
+  {nex1             = (Sz env1)}
+  {is-app           = (Eq APP (Hd vr))}
+  {s2               = (lcons (If is-app (VAR nex1) vr) s)}
+  {env2             = (If is-app (snoc env1 vr) env1)}
+  (ingest compile s2 b env2))
+
+;; =ingest-letrec= ingests a recursive let binding.
+;;
+;; This doesn't do any of the let optimizations, and it instead just
+;; loads everything into the bindings table verbatim.
+
+(patfun (ingest-letrec-step ingest compile s env0 [vx k])
+  {[env1 vr] = (ingest compile s vx env0)}
+  (Up k vr env1))
+
+(patfun (ingest-letrec ingest compile s env0 [vs b])
+  nBinds(Sz vs)
+  nex0(Sz env0)
+  ks(gen nBinds (Add nex0))
+  env1(resize (Add nex0 nBinds) env0)
+  s2(lweld (stream (map VAR ks)) s)
+    ; ^ everything is in scope in all bindings and in the body
+  (ingest compile s2 b
+    (foldl
+      (ingest-letrec-step ingest compile s2)
+      env1
+      (zip vs ks))))
+
+;; =ingest-lambda= ingests a function by compiling it and performing
+;; lambda lifting.
+
+(patfun (ingest-lambda ingest compile s env0 lam)
+  { selfkey  = (Sz env0)}
+  { argkey1  = (Inc selfkey)}
+  { argkeys  = (lgen (.lam-arity lam) (Add argkey1))}
+  { nex2     = (Add argkey1 (.lam-arity lam))}
+  {[bin bod] = (ingest compile
+                 (lweld (lrev (lmap VAR argkeys))
+                        (lcons (VAR selfkey) s))
+                 (.lam-body lam)
+                 (Rep 0 0 nex2))}
+
+  {nex3       = (Sz bin)}
+  {[cns free] = (compile
+                  (FUN (.lam-pinned lam) (.lam-name lam)
+                   selfkey argkeys bin bod))}
+  [env0
+   (lfoldl APP (Sap VAL cns) (lmap VAR free))])
+
+(patfun (ingest compile scope ast env)
+  ((union-switch ast
+     (M ingest-mark)
+     (V ingest-local)
+     (G ingest-global)
+     (K ingest-constant)
+     (A ingest-apply)
+     (L ingest-let)
+     (R ingest-letrec)
+     (F ingest-lambda)
+   ) ingest compile scope env ast))
+
+;;; Entry Points
+;;; ------------
+;;;
+;;; =eval-expr= is the primary entry point for external callers.  Given
+;;; an AST, it runs the full pipeline: inline, ingest, compile, and
+;;; evaluate the resulting PLAN law to produce a value.
+;;;
+;;; =compile-expr= handles the ingest-to-PLAN portion.  Since expressions
+;;; may contain let-bindings at the top level, we wrap the expression in
+;;; a dummy function (with one unused argument) to reuse the same let
+;;; machinery used inside functions.  If the expression is just a
+;;; constant, we skip this and return the value directly.
+;;;
+;;; =ingest-expr= is a convenience wrapper that ingests an expression
+;;; starting from an empty state.
+
+(patfun (ingest-expr x)
+  (ingest compile NIL x []))
+
+;; compile-expr : AST -> Any
+
+(patfun (expr-is-value? x)
+  (Eq VAL (Hd x)))
+
+(patfun (make-dummy-function [bin bod])
+  nex(Sz bin)
+  (FUN 0 "dummy" nex (lsing (Inc nex)) bin bod))
+
+(patfun (compile-dummy-function [bin bod])
+  nex(Sz bin)
+  (.0
+    (compile
+      (FUN 0 "dummy" nex (lsing (Inc nex)) bin bod))))
+
+(patfun (compile-expr x)
+  {res[bin bod[val]] = (ingest-expr x)}
+  (If (expr-is-value? bod)
+    val
+    (compile-dummy-function res 0)))
+
+(patfun (compiles-to fun law)
+  (planEq
+    [law ~[]]
+    (compile fun)))
+
+;; Let-shaped expressions (1 x) are only escaped in the outermost
+;; position.  These tests verify the quoting behavior.
+
+assert(compiles-to
+  (FUN 0 "hi" 0 ~[1 2] 0 (VAL (1 2 3)))
+  (Law 1 "hi" [(1 2 3)]))
+
+assert(compiles-to
+  (FUN 0 "hi" 0 ~[1 2] 0 (VAL (1 2)))
+  (Law 1 "hi" (1 2)))
+
+assert(compiles-to
+  (FUN 0 "hi" 0 ~[1 2] 0 (APP (VAL 0) (VAL (1 2 3))))
+  (Law 1 "hi" [[0] (1 2 3)]))
+
+
+;;; Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(patfun (do-not-compile nex fn)
+  Error("do-not-compile" nex fn))
+
+(patfun (test-ingest x)
+  (ingest do-not-compile 0 x []))
+
+(patfun (fake-state binds)
+  binds)
+
+(def Add2 (Add 2))
+
+(tests
+  ; constant
+  ([ (fake-state []) (VAL 0)]
+   (test-ingest (K 0)))
+
+  ; global
+  ([ (fake-state []) (VAL Inc)]
+   (test-ingest (G (Pin (ENTRY "Inc" Inc 0 (K Inc))))))
+
+  ; marked constant
+  ([ (fake-state []) (VAL 0)]
+   (test-ingest (M (K 0))))
+
+  ; static application
+  ([ (fake-state []) (VAL (Add 1))]
+   (test-ingest (A (K Add) (K 1))))
+
+  ; let-bound static application (folded into a constant and then inlined
+  ; into reference-site)
+  ([ (fake-state []) (VAL (Add 1))]
+   (test-ingest (L (A (K Add) (K 1)) (V 0))))
+
+  ; dynamic application
+  ([ (fake-state []) (APP (VAL Inc) (VAL 1))]
+   (test-ingest (A (K Inc) (K 1))))
+
+  ; let-bound dynamic application
+  ( [ (fake-state [(APP (VAL Inc) (VAL 1))])
+      (VAR 0) ]
+   (test-ingest (L (A (K Inc) (K 1)) (V 0))))
+
+  ; letrec
+  ( [ (fake-state
+        [(APP (VAL Inc) (VAR 1))
+         (APP (VAL Inc) (VAL 0))])
+      (VAR 0)
+    ]
+    (test-ingest (R [ (A (K Inc) (V 1))
+                      (A (K Inc) (K 0))
+                    ]
+                   (V 0)))
+  )
+
+  ( [ (fake-state []) (VAL (Add 2)) ]
+    (test-ingest
+      (L (A (K Add) (K 2))
+        (V 0))))
+)
+
+(tests
+  ; constant
+  0(compile-expr (K 0))
+
+  ; dynamic application
+  2(compile-expr (A (K Inc) (K 1)))
+
+  ; constant application in a let
+  ((Add 1)
+   (compile-expr (L (A (K Add) (K 1)) (V 0))))
+
+  ; dynamic application in a let
+  (2
+   (compile-expr (L (A (K Inc) (K 1)) (V 0))))
+
+  ; compile Id
+  ({Id a => a}
+   (compile-expr
+     (F 0 0 0 "Id" 1 (V 0))))
+
+  ; compile Const
+  ({Const a b => a}
+   (compile-expr
+     (F 0 0 0 "Const" 2 (V 1))))
+
+  ; compile Apply
+  ({Apply a b => (a b)}
+   (compile-expr
+     (F 0 0 0 "Apply" 2 (A (V 1) (V 0)))))
+
+  ; compile Const3 (via lifting)
+  (({0 a b => a} (Inc 2))
+   (compile-expr
+     (L (A (K Inc) (K 2))
+       (F 0 0 0 0 1
+        (V 2)))))
+
+  ; Outside references to foldable constants are inlined instead of
+  ; being lifted.
+  ((Law 0 0 Add2)
+   (compile-expr
+     (L (A (K Add) (K 2))
+       (F 0 0 0 0 1
+         (V 2)))))
+)
+
+;;; Utilities
+;;; ---------
+
+;; =apple= ("apply all") converts a row of expressions into a
+;; left-folded application tree.  Used by the frontend to build AST
+;; nodes from parsed function calls.
+
+(patfun (apple xs)
+  (Ifz xs (K 0)
+    (lfoldl A (.0 xs) (ltail (stream xs)))))
+
+(tests
+  ((K 0) (apple []))
+  ((K 1) (apple [(K 1)]))
+  ((A (A (K 1) (K 2)) (K 3)) (apple [(K 1) (K 2) (K 3)])))
+
+; =has-ref= checks if a variable is referenced within an expression
+
+(patfun (has-ref t x[a b])
+  t2(Add t (Sz a))
+  (Seq t
+    (union-switch x
+      (V (Eq t a))
+      (K 0)
+      (G 0)
+      (M (has-ref t a))
+      (A (Or (has-ref t a) (has-ref t b)))
+      (L (Or (has-ref t a) (has-ref (Inc t) b)))
+      (R (Or (any (has-ref t2) a) (has-ref t2 b)))
+      (F (has-ref (Add t (Inc (.lam-arity x)))
+           (.lam-body x))))))
+
+(tests
+  (1 (has-ref 1 (V 1)))
+  (0 (has-ref 1 (K 1)))
+  (0 (has-ref 2 (M (V 1))))
+  (1 (has-ref 1 (L (K 1) (V 2))))
+  (1 (has-ref 1 (F 0 0 0 "Id" 1 (V 3))))
+)
+; TODO: Test letrec bodies
+; TODO: Test letrec binds
+; TODO: Test let binds
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Integration Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;; Test Proper Use of `seen` ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  ( (#law "test" (test a)
+      b(#(Inc) a #(5))
+      (b b))
+    (compile-expr
+      (F 0 0 0 "test" 1          ; = (test arg)
+        (L (A (K Inc) (V 0))     ; @ b | Inc arg
+          (L (A (V 0) (K 5))     ; @ a | b 5
+            (A (V 0) (V 0))))))) ; | A A
+
+  ( (#law "test" (test o)
+      z(#(Inc) o 3 #(7))
+      (z z))
+    (compile-expr
+      (F 0 0 0 "test" 1              ; = (test o)
+        (L (A (K Inc) (V 0))         ; @ x | Inc o
+          (L (A (V 0) (K 3))         ; @ y | x 3
+            (L (A (V 0) (K 7))       ; @ z | y 7
+              (A (V 0) (V 0))))))))) ; | z z
+
+
+;;; Proper use of table ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  ( (#law "test" (test x)
+      a(#(Inc) x)
+      b(#(Dec) x)
+      ((a a) (b b)))
+    (compile-expr
+      (F 0 0 0 "test" 1
+        (L (A (K Inc) (V 0))         ; A = Inc(arg)
+          (L (A (K Dec) (V 1))       ; B = Dec(arg)
+            (A (A (V 1) (V 1))       ; A(A)(B(B))
+              (A (V 0) (V 0))))))))
+
+  ( (#law "test" (test a b)
+      c(a b)
+      (c c))
+    (compile-expr
+      (F 0 0 0 "test" 2
+        (L (A (V 1) (V 0))          ; C = arg0(arg1)
+          (A (V 0) (V 0)))))))      ; C(C)
+
+
+;;; refcount tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  ( (#law "test" (test a) (a a))
+    (compile-expr
+      (F 0 0 0 "test" 1
+        (L (A (K Inc) (V 0))         ; B = Inc(arg), never used
+          (A (V 1) (V 1))))))        ; arg(arg)
+
+  ( (#law "test" (test a)
+      b(#(Inc) a)
+      (b (#(Dec) a) b))
+    (compile-expr
+      (F 0 0 0 "test" 1
+        (L (A (K Inc) (V 0))         ; B = Inc(arg), used twice
+          (L (A (K Dec) (V 1))       ; C = Dec(arg), used once
+            (A (A (V 1) (V 0))       ; B(C, B)
+              (V 1)))))))
+
+  ( (#law "test" (test a)
+      b(a (#(Dec) a))
+      (b b))
+    (compile-expr
+      (F 0 0 0 "test" 1
+        (L (A (K Inc) (V 0))         ; A = Inc(arg), unused
+          (L (A (K Dec) (V 1))       ; B = Dec(arg), single-use
+            (L (A (V 2) (V 0))       ; C = arg(B), used twice
+              (A (V 0) (V 0)))))))))

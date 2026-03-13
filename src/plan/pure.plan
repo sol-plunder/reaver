@@ -1,0 +1,48 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+;; This is a testing file which doesn't use any of the extended primops
+;; set.
+
+(#bind zero 0)
+
+(3]
+
+234
+"a"
+(#bind x 1)
+x
+(x x)
+(x (x x))
+(#bind pin0      (#pin 0))                 pin0
+(#bind const     (#law "const" (_ x y) x)) const
+(#bind pin-const (#pin const))             pin-const
+(const 3)
+(const 3 4)
+(const x 4)
+
+;; Can't do much else here until the native runtime is updated to share
+;; an ABI with the spec.  Can't even implement Hd or Ix0.
+
+"
+   This is a really
+   big string.  Should
+   be fine, though.
+"
+
+;; law forms
+
+(#bind const
+  (#law "const" (const x y)
+    x))
+
+(const 9)
+
+
+;; Recursive law forms
+
+(#bind eat (#law "eat" (eat x) eat)) ; refers to self
+(eat 3)
+(#bind eat (#law "eat" (_ x) eat))   ; referse to other law
+(eat 3)

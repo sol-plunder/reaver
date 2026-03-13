@@ -1,0 +1,117 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@env
+
+;;; Basic ADT Macros
+;;; ================
+;;;
+;;; This defines some basic Wisp macros for working with
+;;; tag-discriminated unions.
+;;;
+;;; Since this is defined before the lambda macros, we don't have any
+;;; good way to introduce bindings in nested contexts, so we only
+;;; provide macros for switching on tags, you still have to pull out
+;;; the fields by hand.
+
+(patfun (get-cnstr-tag e nm)
+  {r[_ val] = (getenv nm e)}
+  (If (And (Eq (Sz nm) 1) (Eq (Hd nm 1)))
+    (.0 nm)
+    (Ifz r Error("unbound-constructor" nm)
+      val)))
+
+(patfun (verify-constructor-is-number n k)
+  (Ifz (IsNat n)
+    Error("constructor-not-nat" n)
+    k))
+
+(patfun (verify-constructors-are-numbers tags k)
+  (lfoldr verify-constructor-is-number k tags))
+
+(patfun (verify-constructors-are-contiguous keys k)
+  sorted(rowsort keys)
+  (Ifz (Eq (Sz sorted) (Sz keys))
+    Error("duplicates-in-case-codegen" keys)
+  (Ifz (planEq sorted (gen (Sz sorted) id))
+    Error("non-contiguous-constructors" sorted)
+      k)))
+
+(patfun (case-codegen scrut bs)
+  head-expr[(1 Hd) scrut]
+  (Case5 (Sz bs)
+    Error("empty switch")
+    [(1 Seq) scrut (.0 bs)]
+    [(1 Ifz) head-expr (.0 bs) (.1 bs)]
+    [(1 Case3) head-expr (.0 bs) (.1 bs) (.2 bs)]
+    [(1 Case) head-expr (cons (1 0) (Init bs)) (Last bs)]))
+
+(patfun (switch-codegen scrut branches)
+  (case-codegen scrut
+    (array
+      (envvals (pairsenv (stream branches))))))
+
+(patfun (valid-switch-branch-shape branch)
+  (And (Eq 2 (Sz branch))
+    (And (Nil (Hd branch))
+      (IsNat (.0 branch)))))
+
+(patfun (verify-switch-branch-shape branch k)
+  (Ifz (valid-switch-branch-shape branch)
+    Error("invalid-branch" branch)
+    k))
+
+(patfun (verify-switch-branch-shapes bs k)
+  (lfoldr verify-switch-branch-shape k (stream bs)))
+
+(patmacro (union-switch e x[_ scrut])
+  branches(drop 2 x)
+  cnstrs(map .0 branches)
+  tags(Force (map (get-cnstr-tag e) cnstrs))
+  (verify-switch-branch-shapes branches
+    (verify-constructors-are-numbers (stream tags)
+      (verify-constructors-are-contiguous tags
+        (switch-codegen scrut (zip tags (map .1 branches)))))))
+
+
+;;; Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defval ATOM 0)
+(defval CELL 1)
+
+(tests
+  (4 (union-switch (ATOM 9) (ATOM 4) (CELL 5)))
+  (5 (union-switch (CELL 9) (ATOM 4) (CELL 5))))
+
+(defval A 0)
+(defval B 1)
+(defval C 2)
+(defval D 3)
+(defval E 4)
+(defval F 5)
+(defval G 6)
+(defval H 7)
+(defval I 8)
+(defval J 9)
+(defval K 10)
+(defval L 11)
+
+(patfun (manied x)
+  (union-switch x
+    (A "a")
+    (B "b")
+    (C "c")
+    (D "d")
+    (E "e")
+    (F "f")
+    (G "g")
+    (H "h")
+    (I "i")
+    (J "j")
+    (K "k")
+    (L "l")))
+
+(tests
+  ("abcdefghijkll"
+   (lstrcat (lmap manied ~[A B C D E F G H I J K L 99]))))

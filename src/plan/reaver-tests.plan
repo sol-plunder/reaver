@@ -1,0 +1,168 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@reaver
+
+"End-to-end reaver tests"
+
+;; Test environment: a few globals
+;; Inc=100, Add=101, foo=102, Seq=103
+(defval gInc (ginsert (Pin ["Inc" 100 0 (K 100) 0]) 0))
+(defval gAdd (ginsert (Pin ["Add" 101 0 (K 101) 0]) gInc))
+(defval gFoo (ginsert (Pin ["foo" 102 0 (K 102) 0]) gAdd))
+(defval gEnv (ginsert (Pin ["Seq" 103 0 0       0]) gFoo))
+
+(defval incEntry (glookup "Inc" gEnv))
+(defval addEntry (glookup "Add" gEnv))
+(defval fooEntry (glookup "foo" gEnv))
+
+;; Wrappers that pass cache=0 ctx=0 uniq=0 and extract the expr (.3), for clean test syntax.
+(define (reaver0 glo form)
+  (.3 (reaver 0 0 0 glo form)))
+
+(define (readExpr0 glo locals depth form)
+  (.3 (reaver-form 0 0 0 glo locals depth form)))
+
+(define (reaver-symbol0 glo locals depth form)
+  (.3 (reaver-symbol 0 0 glo locals depth form)))
+
+"reaver-symbol: symbol resolution"
+
+(tests
+  ;; Global reference
+  ((G incEntry)
+   (reaver-symbol0 gEnv 0 0 "Inc"))
+
+  ;; Unbound name crashes
+  ((1 ("unbound" "nope"))
+   (Try (reaver-symbol 0 0 gEnv 0 0) "nope"))
+)
+
+;; Local references need env with locals inserted
+(defval locsX1 (bst-sing "x" 1))
+
+(tests
+  ;; Local ref: x@1, depth 1 → index 0
+  ((V 0)
+   (reaver-symbol0 gEnv locsX1 1 "x"))
+
+  ;; Local ref: x@1, depth 3 → index 2
+  ((V 2)
+   (reaver-symbol0 gEnv locsX1 3 "x"))
+
+  ;; Local shadows global: foo in locals@6, depth 6 → index 0
+  ((V 0)
+   (reaver-symbol0 gEnv (bst-sing "foo" 6) 6 "foo"))
+)
+
+"reaver-form: values, symbols, applications"
+
+(tests
+  ;; Literal value: (1 42) → K 42
+  ((K 42)
+   (reaver0 gEnv '(42)))
+
+  ;; Symbol resolves to global
+  ((G incEntry)
+   (reaver0 gEnv "Inc"))
+
+  ;; Empty app → K 0
+  ((K 0)
+   (reaver0 gEnv '(())))
+
+  ;; Singleton app → unwrap
+  ((K 3)
+   (reaver0 gEnv '( (3) )))
+
+  ;; Multi-arg app: (3 4 5) → A (A (K 3) (K 4)) (K 5)
+  ((A (A (K 3) (K 4)) (K 5))
+   (reaver0 gEnv '( (3 4 5) )))
+
+  ;; Global in app: (Inc 3)
+  ((A (G incEntry) (K 3))
+   (reaver0 gEnv '( (Inc 3) )))
+)
+
+(defval ex '( (#inline Inc) ))
+
+(tests
+  ;; (#inline Inc) → M (G incEntry)
+  ((M (G incEntry))
+   (reaver0 gEnv ex)))
+
+"#fun: basic"
+
+(tests
+  ;; (#fun nopin noinline 0 (_ x y) (x y))
+  ;; self=_@1, x@2, y@3, body at depth 3
+  ;; x = 3-2 = 1, y = 3-3 = 0
+  ((F 0 0 0 0 2 (A (V 1) (V 0)))
+   (reaver0 gEnv '( (#fun nopin noinline 0 (_ x y) (x y)) )))
+
+  ;; (#fun pin noinline 102 (f x) (f x))
+  ;; self=f@1, x@2, body at depth 2
+  ;; f = 2-1 = 1, x = 2-2 = 0. has-ref 1 body = true (self used)
+  ((F 1 0 1 102 1 (A (V 1) (V 0)))
+   (reaver0 gEnv '( (#fun pin noinline 102 (f x) (f x)) )))
+
+  ;; (#fun nopin inline 0 (_ x) (#inline x))  -- marked lambda
+  ((F 0 1 0 0 1 (M (V 0)))
+   (reaver0 gEnv '( (#fun nopin inline 0 (_ x) (#inline x)) )))
+)
+
+"#fun: capture from outer scope"
+
+;; Lambda at depth 1 with z@1 in outer scope:
+;; (#fun nopin noinline 0 (_ x) (z x))
+;; self@2, x@3, body at depth 3. z = 3-1 = 2, x = 3-3 = 0
+(defval locsZ1 (bst-sing "z" 1))
+
+(tests
+  ((F 0 0 0 0 1 (A (V 2) (V 0)))
+   (readExpr0 gEnv locsZ1 1 '( (#fun nopin noinline 0 (_ x) (z x)) )))
+)
+
+"#fun: wildcards"
+
+(tests
+  ;; (#fun nopin noinline 0 (_ _ x _) x)
+  ;; self=""@1, _→0@2, x@3, _→0@4, body at depth 4
+  ;; x = 4-3 = 1
+  ((F 0 0 0 0 3 (V 1))
+   (reaver0 gEnv '( (#fun nopin noinline 0 (_ _ x _) x) )))
+)
+
+"#let: basic"
+
+(tests
+  ;; (#let ((a 3)) a) -- simple let
+  ;; a@1, body at depth 1. a = 1-1 = 0
+  ((L (K 3) (V 0))
+   (reaver0 gEnv '( (#let ((a 3)) a) )))
+
+  ;; (#let ((x 3) (y 4)) (x y))
+  ;; x@1, y@2. val x at depth 0, val y at depth 1.
+  ;; body at depth 2. x = 2-1 = 1, y = 2-2 = 0
+  ((L (K 3) (L (K 4) (A (V 1) (V 0))))
+   (reaver0 gEnv '( (#let ((x 3) (y 4)) (x y)) )))
+
+  ;; Let with global in value: (#let ((a Inc)) a)
+  ((L (G incEntry) (V 0))
+   (reaver0 gEnv '( (#let ((a Inc)) a) )))
+)
+
+"#let: parallel semantics"
+
+;; (#let ((x 3) (y x)) y) with outer x@6, at depth 10
+;; x@11, y@12. val x at depth 10, val y at depth 11.
+;; In val y: outer x at 6, depth 11 → index = 11-6 = 5
+;; body at depth 12: y = 12-12 = 0
+(defval locsX6 (bst-sing "x" 6))
+
+(tests
+  ((L (K 3) (L (V 5) (V 0)))
+   (readExpr0 gEnv locsX6 10 '( (#let ((x 3) (y x)) y) )))
+)
+
+(print "all reaver end-to-end tests passed")

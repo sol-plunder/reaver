@@ -1,0 +1,247 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+@bst
+
+;;;; Global Environments for Reaver
+;;;; ==============================
+;;;;
+;;;; This is designed to split the environment into a number of small
+;;;; pins, without getting too complicated.  If the whole environment
+;;;; is in one pin, incremental snapshots are too slow.
+;;;;
+;;;; So, we bin characters based on the first 15 bits, via a three-layer
+;;;; tri based on each 5 bits.  In practice, this means that identifiers
+;;;; are binned based on the first 2 characters.  Note: use qualified
+;;;; imports and avoid shared prefixes!
+;;;;
+;;;; Concrete data structure
+;;;;
+;;;;     Global = 0 | Pin Entry | Pin (Bst (Pin Entry)) | Pin (Array 32 Global)
+;;;;
+;;;;     Entry = (name, value, isMacro, inlineExpr, typeInfo)
+;;;;
+;;;; Discriminate on node types by Sz
+;;;;
+;;;;     < 5  -> Bst node
+;;;;     = 5  -> Entry
+;;;;     > 5  -> Array (layer)
+;;;;
+;;;; Insert is bounded to 3 levels of array routing before BST leaf.
+;;;;
+;;;; Unlike conventional in-memory symbol tables, this structure is designed
+;;;; around the cost model of a content-addressed persistent store, where
+;;;; reading is cheap but each modified node must be re-serialized and hashed.
+;;;; The goal is therefore to minimize pin churn per insert rather than
+;;;; pointer depth or memory allocation.  A naive approach — storing the
+;;;; entire environment as a single BST — works fine until you snapshot, at
+;;;; which point the whole tree must be re-serialized on every top-level
+;;;; definition.  This structure bounds each insert to at most four pin
+;;;; updates (three trie array nodes plus one leaf BST), regardless of
+;;;; environment size.
+;;;;
+;;;; This is a loose approximation of a hitchhiker tree adapted to a
+;;;; content-addressed store: simple enough to fit in a screenful of code,
+;;;; correct enough for any realistic environment size, and easy to reason
+;;;; about from first principles.  The per-bucket lifecycle
+;;;; (0 -> entry -> bst -> array) means sparse namespaces never materialize
+;;;; unnecessary structure, and the fixed three-level depth bound means
+;;;; lookup cost is always predictable.  Degenerate cases — thousands of
+;;;; bindings sharing the same character prefix — are possible but
+;;;; discouraged; use qualified imports and distinct prefixes.
+;;;;
+;;;; The trie is keyed on the low nibbles of the first three characters of
+;;;; each identifier, giving 16 buckets per level and three levels of
+;;;; routing before falling back to a BST.  This means the bucket an
+;;;; identifier lands in is immediately legible when inspecting a snapshot:
+;;;; "foo" is in bucket 6 at depth 0 because 'f' & 0xF = 6, no hash
+;;;; function to mentally simulate.  Uppercase and lowercase letters share
+;;;; buckets (A and Q both have low nibble 1), which is acceptable since
+;;;; most identifiers are lowercase.  The high nibble of each byte is
+;;;; skipped entirely — for ASCII identifiers it carries almost no entropy,
+;;;; since lowercase letters all have high nibble 6.
+
+(define .entry-name   .0)
+(define .entry-val    .1)
+(define .entry-macro  .2)
+(define .entry-inline .3)
+(define .entry-type   .4)
+
+(define MAX-BUCKET-DEPTH 5)
+
+(define ENTRY-SIZE 5)
+
+(define (.pinned-entry-name pe)
+  (.entry-name (Unpin pe)))
+
+(define (look key bits global)
+  (define inner (Unpin global))
+  bits
+  (And global
+    (Case3 (Cmp (Sz inner) ENTRY-SIZE)
+      (bst-idx key inner)
+      (And (Eq key (.entry-name inner)) global)
+      (look key (Rsh bits 8) (Ix (Nib 0 bits) inner)))))
+
+(define (glookup key global)
+  (look key (Trunc32 key) global))
+
+(define (gins key bits depth entry global)
+  (define inner (Unpin global))
+  (define hash  (Nib (Lsh depth 1) bits))
+
+  ;;; BST case: insert into existing BST, or convert to array if full.
+  (define bst-case
+    (If (And (Ge (Hd inner) 32) (Lt depth MAX-BUCKET-DEPTH))
+      (gins key bits depth entry
+        (lfoldl {g kv[k v] -> (gins k (Trunc32 k) depth v g)}
+                (Pin (Rep 0 0 16))
+                (bst-walk inner)))
+      (Pin (bst-insert key entry inner))))
+
+  ;;; Entry case: replace, or promote to a 2-entry BST.
+  (define entry-case
+    (define ikey (.entry-name inner))
+    (If (Eq key ikey)
+      entry
+      (Pin (bst-duo key entry ikey global))))
+
+  ;;; Trie case: route into the appropriate child bucket.
+  (define trie-case
+    (define child    (Ix hash inner))
+    (define newchild (gins key bits (Inc depth) entry child))
+    newchild
+    (Pin (Up hash newchild inner)))
+
+  key bits depth entry global
+  (Ifz global entry
+    (Case3 (Cmp (Sz inner) ENTRY-SIZE) bst-case entry-case trie-case)))
+
+(define (ginsert entry global)
+  (define key (.pinned-entry-name entry))
+  (gins key (Trunc32 key) 0 entry global))
+
+(define gempty 0)
+
+
+;;; Imports and Exports ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; gimport : Array Nat -> Global -> Global -> Global
+(define (gimport keys source global)
+  (define (step global key)
+    (let1 ent (glookup key source)
+      (If ent (ginsert ent global)
+        (Error ("unbound" key)))))
+  (foldl step global keys))
+
+; gexport : Array Nat -> Global -> Global
+(define (gexport keys global)
+  (gimport keys global gempty))
+
+; gwalk : Global -> List PinnedEntry
+(define (gwalk global)
+  (define inner (Unpin global))
+  (And global
+    (Case3 (Cmp (Sz inner) ENTRY-SIZE)
+      (bst-vals-list inner)
+      (lsing global)                    ; Entry node: singleton
+      (lcatmap gwalk (stream inner))))) ; Trie node: recurse into children
+
+; gimport-all : Global -> Global -> Global
+(define (gimport-all source target)
+  (lfoldl (flip ginsert) target (gwalk source)))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (showNat n)
+  (define (loop n acc)
+    (Ifz n acc
+      (loop (Div n 10)
+        (lcons (Add (Mod n 10) "0")
+          acc))))
+  (Ifz n "0"
+    (limplode (loop n []))))
+
+(define (showAlpha n)
+  (define (loop n acc)
+    (Ifz n acc
+      (loop (Div n 26)
+        (lcons (Add (Mod n 26) "a")
+          acc))))
+  (Ifz n "a"
+    (limplode (loop n []))))
+
+(tests
+  ("0"    (showNat 0))
+  ("1"    (showNat 1))
+  ("10"   (showNat 10))
+  ("1234" (showNat 1234))
+  ("a"    (showAlpha 0))
+  ("b"    (showAlpha 1))
+  ("ba"   (showAlpha 26))
+  ("bvm"  (showAlpha 1234)))
+
+
+;;; Test Suite ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (make-entry name val)
+  (Pin [name val 0 0 0]))
+
+(define (ginsert-all entries global)
+  (foldl (flip ginsert) global entries))
+
+(define (glookup-all keys global)
+  (map (flip glookup global) keys))
+
+(define (gcheck entries)
+  (define generated (ginsert-all entries 0))
+  (print generated)
+  (glookup-all (map .pinned-entry-name entries) generated))
+
+(define e1 (make-entry "foo" 1))
+(define e2 (make-entry "bar" 2))
+(define e3 (make-entry "baz" 3))
+(define e4 (make-entry "qux" 4))
+(define e5 (make-entry "fob" 5))
+
+(tests
+  (0                   (glookup "foo" 0))
+  (e1                  (ginsert e1 0))
+  (e1                  (glookup "foo" (ginsert e1 0)))
+  (0                   (glookup "bar" (ginsert e1 0)))
+  ([e1]                (gcheck [e1]))
+  (0                   (glookup "bar" (ginsert e1 0)))
+  (e1                  (ginsert-all [e1 e1] 0))
+  (e2                  (glookup "bar" (ginsert e2 (ginsert e1 0))))
+  ([e1 e2]             (gcheck [e1 e2]))
+  ([e1 e2 e3]          (gcheck [e1 e2 e3]))
+  ([e1 e2 e3 e4]       (gcheck [e1 e2 e3 e4]))
+  (0                   (glookup "qux" (ginsert-all [e1 e2 e3] 0)))
+  ([e1 e5]             (gcheck [e1 e5]))
+  ([e1 e2 e3 e4 e5]    (gcheck [e1 e2 e3 e4 e5]))
+  ([e1 e2 e1 e3 e4 e5] (gcheck [e1 e2 e1 e3 e4 e5])))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; depth-2 BST promotion - same first two chars
+(define e-foo (make-entry "foo" 1))
+(define e-fob (make-entry "fob" 2))
+(define e-foz (make-entry "foz" 3))
+(define e-for (make-entry "for" 4))
+
+(tests
+  ([e-foo e-fob]               (gcheck [e-foo e-fob]))
+  ([e-foo e-fob e-foz]         (gcheck [e-foo e-fob e-foz]))
+  ([e-foo e-fob e-foz e-for]   (gcheck [e-foo e-fob e-foz e-for])))
+
+; stress test - 30 entries with distinct keys
+(define stress-entries-30
+  (gen 30 {i -> (make-entry (strWeld "e-" (showNat i)) i)}))
+
+(#export
+  ginsert glookup gwalk gimport gimport-all gexport
+  .entry-name .entry-val .entry-macro .entry-inline .entry-type)

@@ -1,0 +1,151 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@riv
+
+;;; Flat printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Produces lazy lists of string fragments for width measurement.
+
+; stream-from : Nat -> Array a -> List a
+(define (stream-from i x)
+  (And (Lt i (Sz x))
+    [(Ix i x) (stream-from (Inc i) x)]))
+
+; flatExprs : (a -> List Str) -> List a -> List Str
+(define (flatExprs go xs[hd tl])
+  (Ifz xs NIL
+    (Ifz tl (go hd)
+      (lweld (go hd) [" " (flatExprs go tl)]))))
+
+; isString : Nat -> Bool
+(define (isString n)
+  (And (IsNat n)
+    (And (Gt (Bytes n) 1)
+      (strAll isPrint n))))
+
+; flatNatVal : Nat -> List Str
+(define (flatNatVal n)
+  (If (isString n)
+    [dquote [n [dquote NIL]]]
+    [(showNat n) NIL]))
+
+; flatAtom : Nat -> List Str
+(define (flatAtom v)
+  (flatNatVal v))
+
+; flatExpr : Sexp -> List Str
+(define (flatExpr x[tag])
+  (cond
+    ((IsNat x)        [x NIL])
+    ((Eq 1 (Hd x))    (flatAtom (Ix0 x)))
+    ((Eq "LOC" tag)   (flatExpr (Ix2 x)))
+    ((Eq "JUXT" tag)  (lweld (flatExpr (Ix1 x)) (flatExpr (Ix2 x))))
+    ((Eq "BRAK" tag)  (lweld ["[" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["]" NIL])))
+    ((Eq "CURL" tag)  (lweld ["{" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["}" NIL])))
+    (else             (lweld ["(" NIL] (lweld (flatExprs flatExpr (stream-from 0 x)) [")" NIL])))))
+
+;;; Pretty printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Uses a greedy first-line packing strategy (takeFitting) rather than
+;;; all-or-nothing flat/multiline.
+
+; scanLoop : Nat -> Nat -> List Str -> List Str -> Str | 0
+(define (scanLoop limit acc frags0 frags[hd tl])
+  (Ifz frags (lstrcat frags0)
+    (let1 acc (Add acc (Bytes hd))
+      (And (Le acc limit)
+        (scanLoop limit acc frags0 tl)))))
+
+; scanFlat : Nat -> List Str -> Str | 0
+(define (scanFlat limit frags)
+  (scanLoop limit 0 frags frags))
+
+; tryFlat : Nat -> List Str -> a -> Str | a
+(define (tryFlat wid frags breakFn)
+  (let ((flat (scanFlat wid frags)))
+    (Ifz flat breakFn flat)))
+
+; fitFlat : Nat -> List Str -> Nat   (returns Inc(remaining) on success, 0 on overflow)
+(define (fitFlat n frags)
+  (Ifz frags (Inc n)
+    (let1 frags[hd tl] frags
+      (define len (Bytes hd))
+      (If (Gt len n) 0
+        (fitFlat (Sub n len) tl)))))
+
+; takeFitting : Nat -> List Sexp -> [List Sexp, List Sexp]
+(define (takeFitting n xs)
+  (Ifz xs [NIL NIL]
+    (let1 xs[x rest] xs
+      (define r (fitFlat n (flatExpr x)))
+      (Ifz r [NIL xs]
+        (let1 _p[taken leftover] (takeFitting (Dec r) rest)
+          [[x taken] leftover])))))
+
+; Pretty-print a list form (paren/brak/curl) with given delimiters.
+; Strategy:
+;   1. If whole form fits flat: render flat.
+;   2. Otherwise: greedily pack first line via takeFitting.
+;      - If no items fit: pretty-print first item on first line.
+;      - If some items fit: flat-print them on first line.
+;      Remaining items each go on their own indented line.
+
+; prettyList : (Nat -> Nat -> Sexp -> Str) -> Nat -> Nat -> Str -> Str -> List Sexp -> Str
+(define (prettyList prettyExpr wid ind open close children)
+  (define ind1       (Inc ind))
+  (define indent-str (lstrcat (lrep " " ind1)))
+
+  (define flatFrags
+    (lweld [open NIL] (lweld (flatExprs flatExpr children) [close NIL])))
+
+  (define (restLines xs)
+    (And xs
+      (let1 xs[x rest] xs
+        (lstrcat ~[newline indent-str (prettyExpr wid ind1 x) (restLines rest)]))))
+
+  (tryFlat wid flatFrags
+    (let* ((budget         (Sub wid (Add ind (Bytes open))))
+           (_r[inline rem] (takeFitting budget children)))
+      (Ifz inline
+        ; Nothing fits on first line: force-print first item pretty.
+        (Ifz rem
+          (lstrcat ~[open close])
+          (let1 rem[first rest] rem
+            (lstrcat ~[open (prettyExpr wid ind1 first) (restLines rest) close])))
+        ; Some items fit on first line: flat-print them.
+        (lstrcat ~[open (lstrcat (flatExprs flatExpr inline)) (restLines rem) close])))))
+
+; prettyExpr : Nat -> Nat -> Sexp -> Str
+(define (prettyExpr wid ind x[tag])
+  (cond
+    ((IsNat x)        x)
+    ((Eq 1 (Hd x))    (lstrcat (flatAtom (Ix0 x))))
+    ((Eq "LOC" tag)   (prettyExpr wid ind (Ix2 x)))
+    ((Eq "JUXT" tag)  (define s   (Ix1 x))
+                      (define arg (Ix2 x))
+                      (strWeld s
+                        (prettyExpr wid (Add ind (Bytes s)) arg)))
+    ((Eq "BRAK" tag)  (prettyList prettyExpr wid ind "[" "]" (stream-from 1 x)))
+    ((Eq "CURL" tag)  (prettyList prettyExpr wid ind "{" "}" (stream-from 1 x)))
+    (else             (prettyList prettyExpr wid ind "(" ")" (stream-from 0 x)))))
+
+; prettyWexp : Nat -> Sexp -> Str
+(define (prettyWexp wid x)
+  (prettyExpr wid 0 x))
+
+;;; Printer tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  ("foo"      (prettyWexp 60 "foo"))
+  ("42"       (prettyWexp 60 (1 42)))
+  ("(f x y)"  (prettyWexp 60 (0 "f" "x" "y")))
+  ("[a b c]"  (prettyWexp 60 (0 "BRAK" "a" "b" "c")))
+  ("{a b c}"  (prettyWexp 60 (0 "CURL" "a" "b" "c")))
+  ("f(a b)"   (prettyWexp 60 (0 "JUXT" "f" (0 "a" "b"))))
+  ("foo"      (prettyWexp 60 (0 "LOC" (1 (0 1 1)) "foo"))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(#export prettyWexp)

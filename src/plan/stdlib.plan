@@ -1,0 +1,1406 @@
+;;;; Copyright (c) 2026 Benjamin Summers
+;;;; SPDX-License-Identifier: AGPL-3.0-only
+;;;; See LICENSE for full terms.
+
+@boot
+
+(defval .0 Ix0)
+(defval .1 Ix1)
+(defval .2 Ix2)
+(defval .3 Ix3)
+(defval .4 Ix4)
+(defval .5 Ix5)
+(defval .6 Ix6)
+(defval .7 Ix7)
+(defval .8 (Ix 8))
+(defval .9 (Ix 9))
+(defval .10 (Ix 10))
+(defval .11 (Ix 11))
+(defval .12 (Ix 12))
+(defval .13 (Ix 13))
+(defval .14 (Ix 14))
+(defval .15 (Ix 15))
+
+(defun (const x y) x)
+
+(const 3 4)
+
+(defun (assert-impl expr val)
+  (Ifz (Eq 1 val)
+    (Error ("assert" "fail" expr "has" (0 val "!=" 1)))
+    expr))
+
+(assert-impl (1 1) 1)
+;(assert-impl (1 0) 0)
+
+(defmacro (assert e x)
+  xv(Ix1 x)
+  (0 "assert-impl" (1 xv) xv))
+
+(assert 1)
+assert(1)
+
+assert(Eq 1 (const 1 2))
+
+assert(Lt 3 4)
+assert(Le 3 4)
+assert(Ne 3 4)
+assert(Lt 3 4)
+assert(Le 3 4)
+assert(Ne 3 4)
+assert(Le 4 4)
+assert(Eq 4 4)
+assert(Ge 4 4)
+
+(defval not Nil)
+
+assert(not (Eq 3 4))
+assert(not (Ge 3 4))
+assert(not (Gt 3 4))
+assert(not (Eq 3 4))
+assert(not (Ge 3 4))
+assert(not (Gt 3 4))
+assert(not (Lt 4 4))
+assert(not (Ne 4 4))
+assert(not (Gt 4 4))
+
+assert(Eq 2 Sz(0 1 2))
+assert(Eq 0 (And 0 3))
+assert(Eq 3 (And 1 3))
+assert(Eq 3 (Or 3 4))
+assert(Eq 4 (Or 0 4))
+
+assert(Eq 9 (If 1 9 (Error 4)))
+assert(Eq 0 (And 0 (Error 4)))
+assert(Eq 3 (Or 3 (Error 5)))
+
+assert(Eq 3 (Ifz 0 3 4))
+assert(Eq 4 (If 0 3 4))
+assert(Eq 4 (Inc 3))
+assert(Eq 4 (Seq 3 4))
+
+assert(Eq 0 (Type 0))              ; nat
+assert(Eq 1 (Type Inc))            ; pin
+assert(Eq 2 Type(#law "f" (f x y) x))  ; law
+assert(Eq 3 Type(0 0))             ; app
+assert(Eq 0 (Type "Hello World!")) ; nat
+
+(def constLaw (#law "const" (const x y) x))
+(def const    (#pin constLaw))
+
+assert(Eq 1       (const 1 3)      )
+assert(Eq 1       (constLaw 1 3)   )
+assert(Eq 2       (Arity constLaw) )
+assert(Eq 1       (Body constLaw)  )
+assert(Eq "const" (Name constLaw)  )
+assert(Eq 0       (Name const)     )
+
+(defun (streamed i end row)
+  (And (Lt i end)
+    (0 (Ix i row) (streamed (Inc i) end row))))
+
+(defun (stream row)
+  (streamed 0 (Sz row) row))
+
+(defun (drop n row)
+  wid(Sz row)
+  (Row 0 (Sub wid n) (streamed n wid row)))
+
+(defun (lweld a b)
+  (Ifz a b
+    (0 (Ix0 a) (lweld (Ix1 a) b))))
+
+(defun (weld a b)
+  (Row 0 (Add (Sz a) (Sz b))
+    (lweld (stream a) (stream b))))
+
+(defun (cons item row)
+  (Row 0 Inc(Sz row)
+    (0 item (stream row))))
+
+; [a b c] =>
+;   (BRAK (a b c)) =>
+;     (0 a b c)
+
+(defmacro (BRAK st x)
+  (Up 0 (1 0) x))
+
+assert(Eq 4 (Sz [1 2 3 4]))
+assert(Eq 5 Sz(cons 0 [1 2 3 4]))
+
+(defun (pinEq eql x y)
+  (eql (Unpin x) (Unpin y)))
+
+assert(pinEq Eq (#pin 0) (#pin 0))
+
+(defun (lawEq eql x y)
+  (And (Eq (Name x) (Name y))
+    (And (Eq (Arity x) (Arity y))
+      (eql (Body x) (Body y)))))
+
+assert(lawEq Eq (#law "id" (id x) x) (#law "id" (() x) x))
+
+(defun (rowEqLoop eql x y xsz i)
+  (Or (Ge i xsz)
+    (And (eql (Ix i x) (Ix i y))
+      (rowEqLoop eql x y xsz (Inc i)))))
+
+(defun (rowEq eql x y)
+  xsz(Sz x)
+  ysz(Sz y)
+  (And (Eq xsz ysz)
+    (And (eql (Hd x) (Hd y))
+      (rowEqLoop eql x y xsz 0))))
+
+(defun (planEq x y)
+  xt(Type x)
+  (And (Eq xt (Type y))
+    (Ix xt
+      (0
+       (Eq x y)
+       (pinEq planEq x y)
+       (lawEq planEq x y)
+       (rowEq planEq x y)))))
+
+assert(Nil (planEq 3 4))
+assert(Nil (planEq 3 planEq))
+assert(planEq planEq planEq)
+
+; TODO: replacing the final 0 with a crash triggers the crash.  But this
+; doesn't happen when I run the same tests in Sire.  Tf is going on?
+
+assert( planEq (Row 3   4   [1 [2 [3 [4 0]]]])  (3 1 2 3 4) )
+assert( planEq (Row 3   3   [1 [2 [3 [4 0]]]])  (3 1 2 3)   )
+assert( planEq (Row 3   2   [1 [2 [3 [4 0]]]])  (3 1 2)     )
+assert( planEq (Row 3   1   [1 [2 [3 [4 0]]]])  (3 1)       )
+assert( planEq (Row 3   0   [1 [2 [3 [4 0]]]])  3           )
+assert( planEq (Row 3   4   [1 [2 [3]]])        (3 1 2 3 0) )
+assert( planEq (Row 3   4   [1 [2 Inc]])        (3 1 2 0 0) )
+assert( planEq (Row Row 4   [1 [2 3 4]])        [1 2 0 0]   )
+assert( planEq (Row 3   Row [1 [2 3 4]])        3           )
+
+assert(planEq "a"               (Rep "a" "v" 0))
+assert(planEq ("a" "v")         (Rep "a" "v" 1))
+assert(planEq ("a" "v" "v")     (Rep "a" "v" 2))
+assert(planEq "a"               (Rep "a" "v" Rep))
+assert(planEq ("a" Rep Rep Rep) (Rep "a" Rep 3))
+assert(planEq "a"               (Hd (Rep "a" (Error 0) 3))) ; value is lazy
+
+assert(Eq 1 (Ix0 [1 2 3 4 5 6 7 8]))
+assert(Eq 2 (Ix1 [1 2 3 4 5 6 7 8]))
+assert(Eq 3 (Ix2 [1 2 3 4 5 6 7 8]))
+assert(Eq 4 (Ix3 [1 2 3 4 5 6 7 8]))
+assert(Eq 5 (Ix4 [1 2 3 4 5 6 7 8]))
+assert(Eq 6 (Ix5 [1 2 3 4 5 6 7 8]))
+assert(Eq 7 (Ix6 [1 2 3 4 5 6 7 8]))
+assert(Eq 8 (Ix7 [1 2 3 4 5 6 7 8]))
+
+assert(Eq 0 (Ix0 Ix0))
+assert(Eq 0 (Ix1 Ix0))
+assert(Eq 0 (Ix2 Ix0))
+assert(Eq 0 (Ix3 Ix0))
+assert(Eq 0 (Ix4 Ix0))
+assert(Eq 0 (Ix5 Ix0))
+assert(Eq 0 (Ix6 Ix0))
+assert(Eq 0 (Ix7 Ix0))
+
+assert(Eq 1 (Cmp Ix7 Ix7))
+assert(Eq 0 (Cmp 7 8))
+assert(Eq 1 (Cmp 8 8))
+assert(Eq 2 (Cmp 9 8))
+
+assert(Eq 2 (Last [1 2]))
+assert(Eq 2 (Last [1 (Add 1 1)]))
+assert(Eq 0 (Last 0))
+assert(Eq 0 (Last Last))
+
+assert(planEq (1 2 3) Init(1 2 3 4))
+assert(planEq (1 2)   Init(1 2 3))
+assert(planEq Add     Init(Add 1))
+assert(planEq 0       (Init Add))
+
+assert(planEq (5 4 2)   (Coup 5       (2 4 2)))
+assert(planEq (Add 4)   (Coup Add     (2 4)))
+assert(planEq (Add 4 2) (Coup Add     (2 4 2)))
+assert(planEq (5 4)     (Coup Add     (1 2 3 4)))
+assert(planEq (3 3 4)   (Coup (Add 1) (1 2 3 4)))
+
+assert(Eq 0   (Trunc8 0))               ;  zero
+assert(Eq 0   (Trunc8 Trunc8))          ;  case
+assert(Eq "H" (Trunc8 "Hello"))         ;  direct
+assert(Eq "H" (Trunc8 "Hello world!"))  ;  indirect
+
+assert(Eq 0    (Trunc16 0))               ;  zero
+assert(Eq 0    (Trunc16 Trunc16))         ;  case
+assert(Eq "He" (Trunc16 "Hello"))         ;  direct
+assert(Eq "He" (Trunc16 "Hello world!"))  ;  indirect
+
+assert(Eq 0      (Trunc32 0))               ;  zero
+assert(Eq 0      (Trunc32 Trunc32))         ;  case
+assert(Eq "Hell" (Trunc32 "Hello"))         ;  direct
+assert(Eq "Hell" (Trunc32 "Hello world!"))  ;  indirect
+
+assert(Eq 0          (Trunc64 0))               ;  zero
+assert(Eq 0          (Trunc64 Trunc64))         ;  case
+assert(Eq "Hello wo" (Trunc64 "Hello wo"))      ;  direct
+assert(Eq "Hello wo" (Trunc64 "Hello world!"))  ;  indirect
+
+;;; Nicer Syntax for Assertions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; `test' is a nicer version of assert which supports multiple tests in a
+; single block and which uses planEq (which works with any PLAN value)
+; instead of Eq (which only works with numbers).
+
+(defun (tests-failure x1 v1 x2 v2)
+  (Trace "ASSERTION FAILURE"
+  (Trace "LEFT EXPR"
+  (Trace x1
+  (Trace "RIGHT EXPR"
+  (Trace x2
+  (Trace "LEFT VALUE"
+  (Trace v1
+  (Trace "RIGHT VALUE"
+  (Trace v2
+  (Error "assertion-failure")))))))))))
+
+(defun (tests-loop checks n i)
+  ck(Ix i checks)
+  x1(Ix 0 ck)
+  v1(Ix 1 ck)
+  x2(Ix 2 ck)
+  v2(Ix 3 ck)
+  (Ifz (Lt i n) (0 n "tests" "passed")
+    (Ifz (planEq v1 v2)
+      (tests-failure x1 v1 x2 v2)
+      (tests-loop checks n (Inc i)))))
+
+(defun (tests-check checks)
+  (tests-loop checks (Sz checks) 0))
+
+(tests-check [["x1" 2 "x2" 2] ["x1" 5 "x2" 5]]) ; modify numbers to trigger an error
+
+; tests
+; =====
+;
+; (tests (5 5) (1 1))
+;
+; parse each test case
+;
+;     e@(x y)      [0 x y]
+;     e@(JUXT x y) [0 "JUXT" x y]
+;         => [x y]
+;
+; this input
+;
+;     (tests (a b) (c d))
+;
+; should expand to this:
+;
+;     [1[test-loop]
+;      [1[0]
+;       [1[a] a 1[b] b]
+;       [1[c] c 1[d] d]]]
+
+(defun (tests-malformed expr)
+  (Error ("malformed test case" expr)))
+
+(defun (tests-parse expr)
+  sz(Sz expr)
+  er(tests-malformed expr)
+  e0(Ix 0 expr)
+  e1(Ix 1 expr)
+  e2(Ix 2 expr)
+  (If (Hd expr) er
+    (If (Eq 2 sz) [e0 e1]
+      (Ifz (Eq 3 sz) er
+        (Ifz (Eq "JUXT" e0) er
+          [e1 e2])))))
+
+
+;;; Quotation ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmacro (' env expr)
+  (1 (Ix 1 expr)))
+
+
+;;; Slicing ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (slice-loop inp n ii oi acc)
+  (If (Ge oi n) acc
+    (slice-loop inp n (Inc ii) (Inc oi)
+      (Up oi (Ix ii inp) acc))))
+
+(defun (slice i n r)
+  (slice-loop r n i 0
+    (Rep 0 0 n)))
+
+(defun (map-loop f x n i acc)
+  (If (Ge i n) acc
+    (map-loop f x n (Inc i)
+      (Up i (f (Ix i x)) acc))))
+
+(defun (map f x)
+  n(Sz x)
+  (map-loop f x n 0
+    (Rep 0 0 n)))
+
+(slice 3 3 [1 2 3 4 5 6 7 8 9])
+(Force (map Inc [1 2 3]))
+
+(defun (imap-loop f x n i acc)
+  (If (Ge i n) acc
+    (imap-loop f x n (Inc i)
+      (Up i (f i (Ix i x)) acc))))
+
+(defun (imap f x)
+  n(Sz x)
+  (imap-loop f x n 0
+    (Rep 0 0 n)))
+
+(defun (cons-loop xs n i acc)
+  j(Inc i)
+  (Seq j
+    (If (Ge i n) acc
+      (cons-loop xs n j
+        (Up j (Ix i xs) acc)))))
+
+(defun (cons x xs)
+  n(Sz xs)
+  (cons-loop xs n 0 (Rep 0 x (Inc n))))
+
+(defun (rowE xs)
+  (cons (1 0) xs))
+
+(defun (tests-expr x)
+  r(tests-parse x)
+  e1(Ix 0 r)
+  e2(Ix 1 r)
+  (rowE [(1 e1) e1 (1 e2) e2]))
+
+(defmacro (tests e x)
+  [(1 tests-check)
+   (rowE (map tests-expr (slice 1 (Dec (Sz x)) x)))])
+
+(assert (Eq 1 (Dec (Sz [["tests"] ["x" "y"]]))))
+(assert (planEq [(1 0) "a" "b" "c"] (rowE ["a" "b" "c"])))
+
+;(Force (tests-parse
+;  '((Add 3 4) 7)))
+
+
+
+
+;; More Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests)
+(tests (1 1))
+(tests (1 1) (2 2))
+(tests ((Add 3 4) 7))
+(tests ((Add 3 4) 7) (1 1))
+
+(tests
+  (0             (Rsh 0 0))               ;  zero
+  (1             (Rsh 1 0))               ;  zero
+  (0             (Rsh 0 1))               ;  zero
+  (3             (Rsh 7 1))               ;  tiny
+  ("ello"        (Rsh "Hello" 8))         ;  direct
+  ("ello world!" (Rsh "Hello world!" 8))) ;  indirect
+
+
+;; Test Test ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests ; Test (bit-index) for direct atoms
+  (0 (Test 0 0))
+  (1 (Test 0 1))
+  (0 (Test 0 2))
+  (1 (Test 0 3))
+  (0 (Test 0 (Bex 62)))
+  (1 (Test 0 Inc(Bex 62)))
+  (0 (Test 0 (Add 2 (Bex 62))))
+  (0 (Test 64 "Hello"))
+  (1 (Test 0 Dec(Bex 63)))
+  (1 (Test 9 Dec(Bex 63)))
+  (1 (Test 62 Dec(Bex 63))))
+
+(tests ; Test (bit-index) for indirect atoms
+  (0 (Test 8888 "hello world!"))
+  (0 (Test 256 Dec(Bex 128)))
+  (0 (Test 128 Dec(Bex 128)))
+  (1 (Test 127 Dec(Bex 128))))
+
+
+;; Test Writting Bits ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  (1           (Set 0 0))
+  (2           (Set 1 0))
+  (3           (Set 1 1))
+  (2           (Set 1 2))
+  (Inc(Bex 62) (Set 62 1)))
+
+(tests
+  (Bex(63)     (Set 63 0)))
+
+(tests
+  (1                   (Set 0   0))
+  (2                   (Set 1   0))
+  (3                   (Set 1   1))
+  (2                   (Set 1   2))
+  (Inc(Bex 62)         (Set 62  1))
+  (Bex(63)             (Set 63  0))
+  ("01234567@"         (Set 70  "01234567"))           ; direct -> indirect
+  ("Iello World!"      (Set 00  "Hello World!"))       ; modify word
+  ("Hello world!"      (Set 53  "Hello World!")))      ; modify word
+
+(tests
+  ("0123456701234567@" (Set 134 "0123456701234567")))
+
+
+;; Test Writing Bytes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;(tests
+;  (0               (Store8 0  0 0))
+;  (0               (Store8 7  0 0))
+;  (0               (Store8 16 0 0))
+;  (1               (Store8 0 1 0))
+;  (256             (Store8 1 1 0))
+;  (65536           (Store8 2 1 0))
+;  (257             (Store8 1 1 1))
+;  ("_1234567"      (Store8 0 "_" "01234567"))
+;  ("01_34567"      (Store8 2 "_" "01234567"))
+;  ("0123456_"      (Store8 7 "_" "01234567"))
+;  ("hello World!"  (Store8 0  "h" "Hello World!"))
+;  ("Hello World?"  (Store8 11 "?" "Hello World!"))
+;  ("Hello World!?" (Store8 12 "?" "Hello World!")))
+
+
+;; Even More Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  (1 (Case3 0 1 2 3))
+  (2 (Case3 1 1 2 3))
+  (3 (Case3 2 1 2 3))
+  (3 (Case3 3 1 2 3)))
+
+(tests
+  (1 (Case4 0 1 2 3 4))
+  (2 (Case4 1 1 2 3 4))
+  (3 (Case4 2 1 2 3 4))
+  (4 (Case4 3 1 2 3 4))
+  (4 (Case4 4 1 2 3 4)))
+
+(tests
+  (1 (Case5 0 1 2 3 4 5))
+  (2 (Case5 1 1 2 3 4 5))
+  (3 (Case5 2 1 2 3 4 5))
+  (4 (Case5 3 1 2 3 4 5))
+  (5 (Case5 4 1 2 3 4 5))
+  (5 (Case5 5 1 2 3 4 5)))
+
+
+;;; Appending to Arrays ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (resize n array)
+  (Row 0 n (stream array)))
+
+(defun (snoc xs x)
+  (xs x))
+
+(tests
+  ( [0 0 0 0 0]  (resize 5 0)       )
+  ( [1 2 3 0 0]  (resize 5 [1 2 3]) )
+  ( [1 2 3 4]    (snoc [1 2 3] 4)   )
+  ( [4]          (snoc 0       4)   ))
+
+
+;;; Conveniences ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+( defun (odd x)         (Test 0 x)    )
+( defun (even x)        (Nil (odd x)) )
+( defun (flip f x y)    (f y x)       )
+( defun (id x)          x             )
+( defun (const x y)     x             )
+( defun (compose f g x) (f (g x))     )
+
+(defun (max x y) (If (Ge x y) x y))
+(defun (min x y) (If (Le x y) x y))
+
+(defun (take n row) (Row 0 n (streamed 0 n row)))
+
+(defun (^ env x)
+  sym(Ix0 (Ix1 x))
+  (Ifz (Nat sym)
+    (Error ("#: bad input" x))
+    [(1 sym) sym]))
+
+
+;;; Nicer Syntax for Lambdas ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (splitArrow i items)
+  x(Ix i items)
+  (Ifz x
+    ["_" (Init items) [(Last items)]]
+    (If (Eq x ".")
+      ["_" (take i items) (drop (Inc i) items)]
+      (If (Eq x "->")
+        (["_" (take i items) (drop (Inc i) items)])
+        (If (Eq x "=>")
+          [(Ix0 items) (drop 1 (take i items)) (drop (Inc i) items)]
+          (splitArrow (Inc i) items))))))
+
+(assert
+  (planEq
+    ["_" ["a" "b"] ["b"]]
+    (splitArrow 0 ["a" "b" "->" "b"])))
+
+(defun (splitCurly items)
+  (splitArrow 0 items))
+
+; {args.. -> body..) =>
+;
+;    (law (0 args..) body..)
+;
+; {self args.. => body..} =>
+;
+;   (law (self args..) body..)
+
+(defun (Unself self)
+  (If (Eq "_" self) 0
+    (If (IsNat self) self
+      (Ix0 self))))
+
+(defun (curly-syntax law-macro ws x)
+  split(splitArrow 0 (drop 1 x))
+  self(Unself (Ix0 split))
+  args(Ix1 split)
+  body(Ix2 split)
+  (weld [law-macro (1 self) (cons self args)] body))
+
+; TODO: just live without this until lambda.wisp
+
+(defmacro (CURL ws x)
+  (curly-syntax "#law" ws x))
+
+assert(Eq 3 ({a b -> b}   2 3))
+assert(Eq 3 ({f a b => b} 2 3))
+
+
+;;; Common Data Structures ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def NONE 0) ; NONE=[]
+(def SOME 0) ; (SOME x)=[x]
+
+
+;;; Closure Updates ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def foo [3 4 5])
+
+(tests
+  ([9 4 5] (Up 0 9 foo))
+  ([3 9 5] (Up 1 9 foo))
+  ([3 4 9] (Up 2 9 foo))
+  ([3 4 5] (Up 3 9 foo)))
+
+; This violates the invariant that the input to UpUniq must never be
+; used again, and observes the underlying mutation.
+
+;(tests ([3 4 5] (UpUniq 4 9 foo)))
+;(tests ([9 4 5] (UpUniq 0 9 foo)))
+;(tests ([9 9 5] (UpUniq 1 9 foo)))
+;(tests ([9 9 9] (UpUniq 2 9 foo)))
+
+(def foo 0) ; hide the invalidated reference in shame.
+
+
+;;; Nibble Tests ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(tests
+  (15 (Nib 0 255))
+  (15 (Nib 1 255))
+  (0  (Nib 2 255))
+  (1  (Nib 0 "ab"))
+  (2  (Nib 0 "BA"))
+  (6  (Nib 1 "ab"))
+  (2  (Nib 2 "ab"))
+  (6  (Nib 3 "ab")))
+
+
+;;; Closure Copy ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; (Copy count src-offset dst-offset src dst) => dst-update
+
+;(tests
+;  (("a" 7 8 3 4)  (Copy 2 0 0 (0 7 8 9)    ("a" 1 2 3 4)))  ; partial
+;  (("a" 1 7 8 4)  (Copy 2 0 1 (0 7 8 9)    ("a" 1 2 3 4)))  ; output offset
+;  (("a" 8 9 3 4)  (Copy 2 1 0 (0 7 8 9)    ("a" 1 2 3 4)))  ; input offset
+;  (("b" 1 8 9 4)  (Copy 2 1 1 (0 7 8 9)    ("b" 1 2 3 4)))  ; partial+offset
+;  (("c" 1 7 8 9)  (Copy 3 0 1 (0 7 8 9)    ("c" 1 2 3 4)))  ; full+offset
+;  (("d" 7 8 9 10) (Copy 4 0 0 (0 7 8 9 10) ("d" 1 2 3 4)))  ; full
+;  (("e" 7 8 9 4)  (Copy 3 0 0 (0 7 8 9)    ("e" 1 2 3 4)))  ; partial
+;  (("f" 7 8 9 0)  (Copy 4 0 0 (0 7 8 9)    ("f" 1 2 3 4)))  ; over-copy
+;  ("f"            (Copy 4 0 0 (0 7 8 9)    "f"))            ; dst not clz
+;)
+;
+
+;;; Store Uniq ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;(tests
+;  ("Hella W#" (Snore 0 0 5 "Hella#" "Hello W#")))
+
+
+;;; Pointer Equality ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;(defun (silly-refeq-test x)
+;  tmp[x x]
+;  (RefEq (Ix0 tmp) (Ix1 tmp)))
+
+;(tests
+;  (0 (RefEq foo [1 2 3]))
+;  (1 (silly-refeq-test [1 2 3])))
+
+(defun (streamed-rev rem row)
+  i(Dec rem)
+  (And rem
+    (0 (Ix i row) (streamed-rev i row))))
+
+(defun (stream-rev row)
+  (streamed-rev (Sz row) row))
+
+(tests
+  ( [3 [2 [1 []]]]
+    (stream-rev [1 2 3])))
+
+
+;; Misc ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (dup x)
+  [x x])
+
+
+;; Lists ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def NIL 0)(def CONS 0)(def lcons 0)
+
+(defun (lgenfrom i n f) (And (Lt i n) (CONS (f i) (lgenfrom (Inc i) n f))))
+(defun (lgen n f)       (lgenfrom 0 n f))
+(defun (gen n f)        (Row 0 n (lgen n f)))
+
+(defun (linterLoop sep list)
+  (And list
+    [sep [ (Ix0 list)
+           (linterLoop sep (Ix1 list)) ]]))
+
+(defun (lintersperse sep list)
+  x(Ix0 list)
+  xs(Ix1 list)
+  (And list (lcons x (linterLoop sep xs))))
+
+(tests
+  ( (lintersperse 3 [0 [1 [2 0]]])
+    [0 [3 [1 [3 [2 0]]]]]))
+
+(defun (lfoldl f z0 l)
+  z1(f z0 (Ix0 l))
+  (Ifz l z0
+    (Seq z1
+      (lfoldl f z1 (Ix1 l)))))
+
+(defun (lfoldr f z l)
+  (Ifz l z
+    (f (Ix0 l) (lfoldr f z (Ix1 l)))))
+
+(defun (foldr-loop f z row i rem)
+  (Ifz rem z
+    (f (Ix i row)
+      (foldr-loop f z row (Inc i) (Dec rem)))))
+
+(defun (foldr f z row)
+  (foldr-loop f z row 0 (Sz row)))
+
+(defun (foldr1 f row)
+  (foldr-loop f (Last row) row 0 (Dec (Sz row))))
+
+(tests
+  (0         (foldr1 Add []))
+  (3         (foldr1 Add [3]))
+  (3         (foldr1 Sub [3]))
+  (6         (foldr1 Add [1 2 3]))
+  ([1 [2 3]] (foldr1 0   [1 2 3])))
+
+(defun (unzip pairs)
+  [ (map .0 pairs) (map .1 pairs) ])
+
+(defun (llen xs)
+  (lfoldl (#law 0 (() x _) (Inc x)) 0 xs))
+
+(defun (foldl-loop f row acc i rem)
+  (Seq2 i acc
+    (Ifz rem acc
+      (foldl-loop f row (f acc (Ix i row)) (Inc i) (Dec rem)))))
+
+(defun (foldl f z row)
+  (foldl-loop f row z 0 (Sz row)))
+
+(tests
+  (10 (foldl Add 1 [2 3 4])))
+
+(defun (ifoldl-loop f row acc i rem)
+  (Seq2 i acc
+    (Ifz rem acc
+      (ifoldl-loop f row (f i acc (Ix i row)) (Inc i) (Dec rem)))))
+
+(defun (ifoldl f z row)
+  (ifoldl-loop f row z 0 (Sz row)))
+
+( defun (lrev xs)      (lfoldl {x y -> [y x]} NIL xs) )
+( defun (cons x xs)    (weld [x] xs)                  )
+( defun (lsing x)      [x 0]                          )
+( defun (lcat ls)      (lfoldr lweld NIL ls)          )
+( def   ~              stream                         )
+
+(defun (rev xs)
+  (Row 0 (Sz xs) (lrev (stream xs))))
+
+(tests
+  ( ~[1 2 3]
+    [1 [2 [3 0]]] )
+
+  ( (lrev ~[1 2 3])
+    ~[3 2 1] )
+
+  ( (rev [1 2 3])
+    [3 2 1] )
+
+  ( 3 (llen ~[1 2 3]))
+
+  ( ~[1 2 3 4 5 6]
+    (lcat ~[~[1] ~[2 3] ~[] ~[4 5 6]])))
+
+(defun (strGenLoop n f acc i)
+  (Seq acc
+    (If (Ge i n) acc
+      (strGenLoop n f (Store8 i (f i) acc) (Inc i)))))
+
+(defun (strGen n f)
+  (strGenLoop n f 0 0))
+
+(defun (lexplode-step str i)
+  (Load8 i str))
+
+(defun (lexplode str)
+  (lgen (Bytes str) (lexplode-step str)))
+
+(defun (limpLoop i acc list)
+  x(Ix0 list)
+  xs(Ix1 list)
+  (Seq2 i acc
+    (Ifz list acc
+      (limpLoop (Inc i) (Store8 i x acc) xs))))
+
+(defun (limplode list)
+  (limpLoop 0 0 list))
+
+(tests
+  ("abc" (limplode (lexplode "abc"))))
+
+(defun (lfilter f l)
+  x(Ix0 l)
+  rest(lfilter f (Ix1 l))
+  (And l
+    (If (f x) [x rest] rest)))
+
+(defun (lsz l)
+  (lfoldr {x acc -> (Inc acc)} 0 l))
+
+(defun (array l)
+  (Row 0 (lsz l) l))
+
+(defun (filter f row)
+  (array (lfilter f (stream row))))
+
+(defun (lall-step f x)
+  (Nil (f x)))
+
+(defun (lall f l)
+  (Nil (lfilter (lall-step f) l)))
+
+(tests
+  (1 (lall even ~[0 2 4]))
+  (0 (lall even ~[0 1 2 4])))
+
+(defun (strAll f str)
+  (lall f (lexplode str)))
+
+(defun (all f xs)
+  (lall f (stream xs)))
+
+(tests
+  ((lfilter even ~[1 2 3 4]) ~[2 4])
+  ((lfilter odd ~[1 2 3 4])  ~[1 3]))
+
+(defun (lenumFrom n)
+  (Seq n
+    [n (lenumFrom (Inc n))]))
+
+(tests
+  ( (lsz ~[1 2 3 4])        4            )
+  ( (array ~[1 2 3 4])      [1 2 3 4]    ))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (lindy i list)
+  (And list
+    (Seq i
+      [[i (Ix0 list)] (lindy (Inc i) (Ix1  list))])))
+
+(defun (lzip xlist ylist)
+  x(Ix0 xlist)
+  xs(Ix1 xlist)
+  y(Ix0 ylist)
+  ys(Ix1 ylist)
+  (And xlist
+    (And ylist
+      [[x y] (lzip xs ys)])))
+
+(defun (zip x y)
+  (Row 0 (min (Sz x) (Sz y))
+    (lzip (stream x) (stream y))))
+
+(tests
+  ( [[3 "three"] [4 "four"] [5 "five"]]
+    (zip [3 4 5] ["three" "four" "five" "six"])))
+
+(defun (lmap f l)
+  (And l
+    [ (f (Ix0 l)) (lmap f (Ix1 l))]))
+
+(defun (lmapi-loop f i l)
+  (Seq i
+    (And l
+      [ (f i (Ix0 l))
+        (lmapi-loop f (Inc i) (Ix1 l)) ])))
+
+(defun (lmapi f l)
+  (lmapi-loop f 0 l))
+
+(tests
+  (
+    ~[1 2 3]
+    (lmap Inc ~[0 1 2])
+  )
+  (
+    (lmapi 0 ~[3 4 5])
+    ~[[0 3] [1 4] [2 5]]
+  )
+)
+
+
+;;; Strings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun (strWeld a b)
+  (Add (Lsh b (Lsh (Bytes a) 3)) a))
+
+(tests
+  ("asdf" (strWeld "" "asdf"))
+  ("asdf" (strWeld "a" "sdf"))
+  ("asdf" (strWeld "as" "df"))
+  ("asdf" (strWeld "asd" "f"))
+  ("asdf" (strWeld "asdf" "")))
+
+(defun (lstrcat xs)
+  (lfoldl strWeld 0 xs))
+
+(tests
+  ("abcdef" (lstrcat ~["ab" "cd" "ef"])))
+
+(defun (decimal n)
+  (And n
+    [(Mod n 10) (decimal (Div n 10))]))
+
+(defun (showNat n)
+  (Ifz n "0"
+    (lstrcat (lrev (lmap (Add "0") (decimal n))))))
+
+(tests
+  ("abcdefg" (lstrcat ~["a" "bc" "d" "" "efg"])))
+
+(tests
+  ("0"   (showNat 0))
+  ("1"   (showNat 1))
+  ("100" (showNat 100)))
+
+
+;;; Quoting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defmacro (' env x)
+  (1 (Ix0 (Ix1 x))))
+
+(tests
+  ("x"                       '(x))
+  (["a" "b"]                 '((a b)))
+  (["BRAK" "a" "b"]          '([a b]))
+  (["JUXT" "x" ["a"]]        '(x(a)))
+  (["JUXT" "x" ["BRAK" "a"]] '(x[a]))
+  (["JUXT" "x" ["CURL" "a"]] '(x{a}))
+  (["JUXT" "x" (1 "a")]      '(x"a")))
+
+
+;;; Destructuring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; BaseLawEnv = (Row Sym, Row (Sym, Exp))
+
+; BindAst = (Row Sym, Row (Sym, Exp))
+;   | NAM Str
+;   | TUP (Maybe Sym) (Row Bind)
+
+(defun (gensym i)
+  (strWeld "__" (showNat i)))
+
+(defun (ixExp n x)
+  [ (1 (Case3 n Ix0 Ix1 (Ix n)))
+    x
+  ])
+
+(tests
+  ((ixExp 0 "a") [(1 Ix0) "a"]))
+
+(defun (tupBind nm i bind)
+  [bind (ixExp i nm)])
+
+; tupBinds : Uniq -> List Bind -> List (Bind, Exp)
+(defun (tupBinds u binds)
+  (lmapi (tupBind u) binds))
+
+; destroyBind : Bind -> Uniq -> (Maybe Sym, List (Bind, Exp))
+
+(defun (destroyBind bind u)
+  name(Or (Ix0 bind) (gensym u))
+  elems(Ix1 bind)
+  (If (IsNat bind)
+    [bind NIL]
+    [name (tupBinds name (stream elems))]))
+
+(tests
+  ( (destroyBind "hi"         5) ["hi"  ~[]                    ] )
+  ( (destroyBind ["a" []]     5) ["a"   ~[]                    ] )
+  ( (destroyBind [0 []]       5) ["__5" ~[]                    ] )
+  ( (destroyBind ["a" ["x"]]  5) ["a"   ~[["x" [(1 Ix0) "a"]]] ] )
+
+  ( (destroyBind ["a" ["x" "y" "z"]] 5)
+    ["a" ~[["x" [(1 Ix0)    "a"] ]
+           ["y" [(1 Ix1)    "a"] ]
+           ["z" [(1 (Ix 2)) "a"] ]]] ))
+
+; destroyLets : List (Bind, Exp) -> Uniq -> List (Bind, Exp)
+
+(defun (destroyLets lets i)
+  l(Ix0 lets)
+  ls(Ix1 lets)
+  bind(Ix0 l)
+  expr(Ix1 l)
+  temp(destroyBind bind i)
+  name(Ix0 temp)
+  more(Ix1 temp)
+  (And lets
+    [[name expr] (destroyLets (lweld more ls) (Inc i))]))
+
+; destroyVars : List Bind -> -> (Uniq, List Sym, List (Bind, Exp))
+
+(defun (destroy args nuvars lets i)
+  step(destroyBind (Ix0 args) i)
+  (Ifz args
+    [nuvars (array (destroyLets lets i))]
+    (destroy
+      (Ix1 args)
+      (nuvars (Or (Ix0 step) "__unused"))
+      (lweld (Ix1 step) lets)
+      (Inc i))))
+
+(tests
+  ((destroy ~["aa" ["bb" ["xx" "yy" [0 ["pp" "qq"]]]]] 0 0 0)
+   [["aa" "bb"]
+    [[ "xx"  [ (1 Ix0)    "bb"  ]]
+     [ "yy"  [ (1 Ix1)    "bb"  ]]
+     [ "__4" [ (1 (Ix 2)) "bb"  ]]
+     [ "pp"  [ (1 Ix0)    "__4" ]]
+     [ "qq"  [ (1 Ix1)    "__4" ]]]]))
+
+(tests
+  ((1 "hi")              '("hi"))
+  (["JUXT" "x" (1 "hi")] '(x"hi")))
+
+(defun (bindType arg)
+  hed(Ix0 arg)
+  (If (IsNat arg) 0
+    (If (Eq "BRAK" hed) 1
+      (If (Ne "JUXT" hed) Error("badarg.wut" arg)
+        (If (Ne 3 (Sz arg)) Error("badarg.juxt" arg)
+          2)))))
+
+(tests
+  (0 (bindType '(x)))
+  (1 (bindType '([x y])))
+  (2 (bindType '(x[x y]))))
+
+(defun (bindParseVec parse-bind bind)
+  [0 (map parse-bind (drop 1 bind))])
+
+(defun (bindParseAlias parse-bind bind)
+  (Up 0 (Ix1 bind)
+    (parse-bind (Ix2 bind))))
+
+(defun (parse-bind bind)
+  (Case3 (bindType bind)
+    bind                               ; symbol
+    (bindParseVec parse-bind bind)     ; [v e c]
+    (bindParseAlias parse-bind bind))) ; alias[v e c]
+
+(tests
+  ((parse-bind '(res))        "res"              )
+  ((parse-bind '(res[pp qq])) ["res" ["pp" "qq"]]))
+
+(defun (is-curl-let? x)
+  (And (Eq 4 (Sz x))
+    (And (Eq "CURL" (Ix0 x))
+      (Eq "=" (Ix2 x)))))
+
+(defun (is-juxt-let? let)
+  (And (Eq 3 (Sz let))
+    (And (Eq "JUXT" (Ix0 let))
+      (IsNat (Ix1 let)))))
+
+(defun (parse-let let)
+  bind(parse-bind (Ix1 let))
+  (If (is-curl-let? let)   [ bind (Ix3 let) ]
+    (If (is-juxt-let? let) [ bind (Ix2 let) ]
+      Error("badlet" let))))
+
+(tests
+  ((is-juxt-let? '( x(3)         )) 1)
+  ((is-curl-let? '( x(3)         )) 0)
+  ((parse-let    '( x(3)         )) ["x"             (0 (1 3))])
+  ((parse-let    '( {x      = 3} )) ["x"             (1 3)])
+  ((parse-let    '( {[x y]  = 3} )) [[0 ["x" "y"]]   (1 3)])
+  ((parse-let    '( {a[x y] = 3} )) [["a" ["x" "y"]] (1 3)]))
+
+; (lambda (self args..) (let) (let) body)
+
+(defun (letExp bx)
+  nm(Ix0 bx)
+  bd(Ix1 bx)
+  ["JUXT" nm bd])
+
+(defun (sum xs)      (foldl Add 0 xs))
+(defun (lsum xs)     (lfoldl Add 0 xs))
+(defun (sum-of f xs) (lsum (lmap f (stream xs))))
+
+(defun (lcatmap f r)
+  (lcat (lmap f r)))
+
+(defun (cat vs)
+  (Row 0 (sum-of Sz vs) (lcatmap stream (stream vs))))
+
+(tests
+  (6
+   (sum-of Sz [[] [1] [2 3] [4] [] [5 6] []]))
+
+  ([1 2 3 4 5 6]
+   (cat [[] [1] [2 3] [4] [] [5 6] []])))
+
+(defun (funExp tagS self body pair)
+  args(Ix0 pair)
+  lets(Ix1 pair)
+  (cat
+    [["#law" tagS (cons self args)]
+     (map letExp lets)
+     [body]]))
+
+(defmacro (patlaw env x)
+  tagS(Ix1 x)
+  sigS(Ix2 x)
+  self(Unself (Ix0 sigS))
+  args(map parse-bind (drop 1 sigS))
+  lets(map parse-let (Init (drop 3 x)))
+  body(Last x)
+  (Trace x
+  (funExp tagS self body (destroy (stream args) 0 (stream lets) 0))))
+
+; Redefine curly syntax to support destructuring
+
+(defmacro (CURL ws x)
+  (curly-syntax "patlaw" ws x))
+
+; (defun (f x) bind body)
+
+; (defun (f x) ..)
+;
+; (bind f 0 0
+;   (pin
+;     (patlaw (f x) ..))
+;   "f")
+
+(defun (is-quoted-constant x)
+  (And
+    (Eq 1 (Sz x))
+    (Eq 1 (Hd x))))
+
+(defun (get-sig-name sig)
+  hed(Ix0 sig)
+  quo(Ix0 hed)
+  (If (IsNat hed) hed
+    (If (And (is-quoted-constant hed) (IsNat quo)) quo
+      Error("get-sig-name" "bad signature" sig))))
+
+(tests
+  ("f" (get-sig-name '((f x))))
+  ("f" (get-sig-name '(("f" x)))))
+
+(defun (fancy-bind-function isMacro e x)
+  sig(Ix1 x)
+  nam(Unself (get-sig-name sig))
+  rest(drop 2 x)
+  [(If isMacro "#macro" "#bind") nam
+    ["#pin" (Weld ["patlaw" (1 nam) sig] rest)]])
+
+(#macro patfun   (fancy-bind-function 0))
+(#macro patmacro (fancy-bind-function 1))
+
+(patmacro (defmacro _ _)
+  Error("use patmacro instead"))
+
+(patmacro (defun _ _)
+  Error("use patfun instead"))
+
+(patfun (uncurry fun [a1 a2])
+  {res[pp qq] = (fun a1 a2)}
+  res)
+
+(tests
+  (7 (uncurry Add [3 4])))
+
+
+;;; More List Operations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(patfun (countdown n)
+  m(Dec n)
+  (And n
+    (Seq m
+      [m (countdown m)])))
+
+(tests
+  ((countdown 3) ~[2 1 0]))
+
+(patfun (ltake n list[x xs])
+  (And n
+    (And list
+      [x (ltake (Dec n) xs)])))
+
+(patfun (ldrop n l)
+  (Ifz n l
+    (ldrop (Dec n) (Ix1 l))))
+
+(tests
+  ( (ltake 5 (lenumFrom 0))            ~[0 1 2 3 4] )
+  ( (ltake 5 (ldrop 2 (lenumFrom 0)))  ~[2 3 4 5 6] ))
+
+(patfun (ldropWhile f list[x xs])
+  (And list
+    (If (f x) (ldropWhile f xs)
+      list)))
+
+(patfun (ltakeWhile f list[x xs])
+  (And list
+    (And (f x)
+      (0 x (ltakeWhile f xs)))))
+
+(patfun (lfoldrix f z l0 i)
+  x(Ix0 l0)
+  l(Ix1 l0)
+  (Seq i
+    (Ifz l0 z
+      (f i x (lfoldrix f z l (Inc i))))))
+
+(patfun (lfoldri f z l)
+  (lfoldrix f z l 0))
+
+(lfoldri "f" "END" ~[1 2 3])
+
+(tests
+  ( (lindy 0 ~[3 4 5])
+    ~[[0 3] [1 4] [2 5]] ))
+
+(patfun (lcat-rows list-of-rows)
+  (lcat (lmap stream list-of-rows)))
+
+(tests ((lcat-rows ~[[3 4] 0 [5 6 7]])
+        ~[3 4 5 6 7] ))
+
+
+;;; Character Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(patfun (packClass strs)
+  (lfoldl (flip Set) 0 (lcat (lmap lexplode (stream strs)))))
+
+(patfun (inClass charClass i)
+  (Test i charClass))
+
+(patfun (unpackClass ccls)
+  (lstrcat
+    (lfilter (inClass ccls)
+      (ltake (Bits ccls)
+        (lenumFrom 0)))))
+
+(def lowers "abcdefghijklmnopqrstuvwxyz")
+(def uppers "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+(def digits "0123456789")
+(def specials "!#$%&'*+,-./:=?@\^_`|~<>")
+(def matchers "()[]{}")
+(def alphaNums (lstrcat ~[lowers uppers digits]))
+(def tab 9)
+(def newline 10)
+(def space 32)
+(def spaces (lstrcat ~[tab newline space]))
+(def semi ";")
+(def dquote 34) ; double-quote character
+
+(def lowChrs   (packClass [lowers]))
+(def uprChrs   (packClass [uppers]))
+(def symChrs   (packClass [lowers uppers digits specials]))
+(def spcChrs   (packClass [spaces]))
+(def natChrs   (packClass [digits]))
+(def prnChrs   (packClass [alphaNums specials matchers spaces semi]))
+(def opnChr    (packClass ["([{"]))
+(def alnumChrs (packClass [alphaNums]))
+
+(tests
+  ("([{"        (unpackClass opnChr)  )
+  ("0123456789" (unpackClass natChrs) ))
+
+(patfun (isAlnum c)       (Test c alnumChrs))
+(patfun (isNatChr c)      (Test c natChrs))
+(patfun (isLower c)       (Test c lowChrs))
+(patfun (isUpper c)       (Test c uprChrs))
+(patfun (isSymChr c)      (Test c symChrs))
+(patfun (isSpcChr c)      (Test c spcChrs))
+(patfun (isPrint c)       (Test c prnChrs))
+(patfun (strNoneStep f c) (Nil (f c)))
+(patfun (strNone f s)     (strAll (strNoneStep f) s))
+
+(tests
+  ((unpackClass symChrs)
+   (strWeld "!#$%&'*+,-./0123456789:<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "\^_`abcdefghijklmnopqrstuvwxyz|~"))
+
+  ( (strAll  isSymChr "abcDEF345_^!'"               ) 1)
+  ( (strNone isSymChr " ()[]{};"                    ) 1)
+  ( (strNone isNatChr  "abcdefghijklmnopqrstuvwxyz" ) 1)
+  ( (strNone isNatChr  "ABCDEFGHIJKLMNOPQRSTUVWXYZ" ) 1)
+  ( (strAll  isNatChr  "01234556789"                ) 1)
+  ( (strAll  isUpper   "BIND"                       ) 1)
+  ( (strNone isNatChr  "_~!@#$%^&*-=|/\:?,."        ) 1)
+  ( (strNone isNatChr  " ()[]{};"                   ) 1)
+
+  ( (lall isSpcChr                  ~[" " 9 10]) 1 )
+  ( (lall {x -> (Nil (isSpcChr x))} ~["a" "("])  1 ))
+
+
+;;; Even More List Operations ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(def lhead Ix0)
+(def ltail Ix1)
+
+(patfun (linit xs)
+  (Ifz (Ix1 xs) 0
+    (lcons (Ix0 xs) (linit (Ix1 xs)))))
+
+(patfun (llast xs)
+  (Ifz (Ix1 xs) (Ix0 xs)
+    (llast (Ix1 xs))))
+
+(tests
+  ( ~[3 4] (linit ~[3 4 5]) )
+  ( 5      (llast ~[3 4 5]) ))
+
+
+(patfun (lsnoc list[x xs] v)
+  (Ifz list (lsing v)
+    [x (lsnoc xs v)]))
+
+(patfun (lhas e list[x xs])
+  (And list
+    (Or (Eq e x)
+      (lhas e xs))))
+
+(patfun (lfind-loop i e list[x xs])
+  (Seq i
+    (And list
+      (If (Eq e x) [i]
+        (lfind-loop (Inc i) e xs)))))
+
+(patfun (lfind e list)
+  (lfind-loop 0 e list))
+
+(patfun (lfind-known e list)
+  (lhead (lfind e list)))
+
+(patfun (lsearch-loop e row n i)
+  (If (Ge i n) i
+    (If (Eq e (Ix i row)) i
+      (lsearch-loop e row n (Inc i)))))
+
+(patfun (lsearch e row)
+  (lsearch-loop e row (Sz row) 0))
+
+(tests
+  (3 (lsearch 0 [1 3 5]))
+  (0 (lsearch 1 [1 3 5]))
+  (3 (lsearch 2 [1 3 5]))
+  (1 (lsearch 3 [1 3 5]))
+  (3 (lsearch 4 [1 3 5]))
+  (2 (lsearch 5 [1 3 5]))
+  (3 (lsearch 6 [1 3 5]))
+  (3 (lsearch 7 [1 3 5])))
+
+(patfun (lany f list[x xs])
+  (And list
+    (Or (f x)
+      (lany f xs))))
+
+(patfun (any f row)
+  (lany f (stream row)))
+
+(patfun (lrange i)
+  (Seq i
+    [i (lrange (Inc i))]))
+
+(patfun (lix i list[x xs])
+  (And list
+    (Ifz i x
+      (lix (Dec i) xs))))
+
+(patfun (lix-error ctx i list[x xs])
+  (Ifz list
+    Error("lix-error" ctx)
+    (Ifz i x
+      (lix-error ctx (Dec i) xs))))
+
+(patfun (lrep i n)
+  (lgen n (const i)))
+
+(patfun (tstep f old[s0 acc] x0)
+  {[s1 x1] = (f s0 x0)}
+  [s1 (acc x1)])
+
+(patfun (traverse st f row)
+  (lfoldl (tstep f) [st 0] (stream row)))
+
+(tests
+  ( (traverse 5 (#law 0 (_ st x) [(Inc st) (Add st x)]) [3 4 5])
+    [8 [8 10 12]] ))
+
+
+;;; Ordering ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defval LT 0)
+(defval EQ 1)
+(defval GT 2)
