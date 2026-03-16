@@ -44,7 +44,7 @@
 (defval E 0)
 
 ; Note that N forces the left and right branches by looking at the size,
-; but that we don't force the key. (TODO: should we?)
+; and the key and size are also forced.
 
 (defval bst-sz Hd)
 
