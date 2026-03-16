@@ -2,6 +2,27 @@
 ;;;; SPDX-License-Identifier: AGPL-3.0-only
 ;;;; See LICENSE for full terms.
 
+;;;; Basic Standard Library
+;;;; ======================
+;;;;
+;;;; This contains a wide range of random definitions, many of which
+;;;; were created during testing and are not actually used.
+;;;;
+;;;; This is the largest file in the Reaver boot, and the messiest,
+;;;; and it should be cleaned up.
+;;;;
+;;;; The structure of this file is somewhat unavoidably haphazard, since
+;;;; we need to define everything from scratch, the structure resists being
+;;;; broken up into clean sections.
+;;;;
+;;;; For example, we define some functions on lists, and then we use
+;;;; those in the implementation of destructuring macros, and then we use
+;;;; *those* to define more list functions.
+;;;;
+;;;; If we had a clean "list functions" section, then it would all need
+;;;; to be defined without the use of destructuring macros, which make things
+;;;; a lot nicer.
+
 @boot
 
 (defval .0 Ix0)
