@@ -11,8 +11,9 @@
 ;;;; bare-bones.  There are no nested functions, and each function
 ;;;; contains only one top-level letrec binding.
 ;;;;
-;;;; This is a compiler from a more expressive lambda-calculus like
-;;;; language to PLAN.  It supports:
+;;;; This module ingests a more expressive lambda-calculus-like language
+;;;; into the flat Code IR defined in =codegen=, which is then lowered
+;;;; to PLAN laws.  It supports:
 ;;;;
 ;;;; -   Nested let bindings.
 ;;;;
@@ -23,7 +24,18 @@
 ;;;;
 ;;;; -   Inlining (but only where specifically requested).
 ;;;;
-;;;; Furthermore, we perform some basic optimizations:
+;;;; Furthermore, the pipeline performs some basic optimizations.
+;;;;
+;;;; During ingestion (this module):
+;;;;
+;;;; -   Let bindings which bind small constants are eliminated (we can
+;;;;     instead directly rely on sharing).
+;;;;
+;;;; -   Let bindings which trivially rebind another let binding are
+;;;;     eliminated, as they contribute nothing to the result except
+;;;;     runtime overhead.
+;;;;
+;;;; During code generation (=codegen=):
 ;;;;
 ;;;; -   Unused let bindings are eliminated.
 ;;;;
@@ -33,13 +45,6 @@
 ;;;;     -   However, single-use let bindings are *not* eliminated if
 ;;;;         the only reference comes from a nested lambda, since this
 ;;;;         could affect how many times the expression is evaluated.
-;;;;
-;;;; -   Let bindings which bind small constants are eliminated (we can
-;;;;     instead directly rely on sharing).
-;;;;
-;;;; -   Let bindings which trivially rebind another let binding are
-;;;;     eliminated, as they contribute nothing to the result except
-;;;;     runtime overhead.
 ;;;;
 ;;;; These basic optimizations (and inlining) mean that you can write
 ;;;; code in a more natural style without generating bad PLAN code.
@@ -94,11 +99,14 @@
 ;;;;
 ;;;; The input IR (AST) is a rich lambda calculus with nested lambdas,
 ;;;; let/letrec bindings, global references, and inline marks.  All
-;;;; variable references use de Bruijn indices.  We use de Bruijn in
-;;;; part because we store input expressions in global bindings for
-;;;; later inlining, and we don't want to have to renumber them every
-;;;; time they are inlined into a new context.  De Bruijn also makes
-;;;; lambda lifting very straightforward.
+;;;; variable references use de Bruijn indices.  Inlineable expressions
+;;;; are stored in global bindings and may have been compiled
+;;;; independently — potentially loaded from a cache long before the
+;;;; current compilation began.  A unique-key representation would be
+;;;; meaningless across compilation boundaries and would require
+;;;; expensive, stateful renaming on every inline.  De Bruijn indices
+;;;; are self-contained and stable: the same expression is valid
+;;;; regardless of what surrounds it.
 ;;;;
 ;;;; The output IR (Code) is a partial law-like representation: just
 ;;;; constants (VAL), variable references (VAR, now keyed by unique
@@ -183,36 +191,6 @@
 ;;;; arguments collected so far.  A Res is the result of one step of the
 ;;;; inlining pass: the transformed expression paired with its inlining
 ;;;; potential (if any).
-
-;;; Compiler
-;;; --------
-;;;
-;;; Once inlining is done, we translate the AST into PLAN laws.
-;;; This is done in three passes: ingestion, analysis, and code
-;;; generation.
-;;;
-;;; The output IR (Code) is much simpler than the input.  It has only
-;;; three constructors: VAL for constants, VAR for variable references,
-;;; and APP for function application.  There are no nested lambdas, no
-;;; let/letrec structure, and no marks or globals.
-;;;
-;;; Variable references in Code use unique integer keys rather than
-;;; de Bruijn indices.  Each let binding gets a fresh key during
-;;; ingestion, so references are unambiguous regardless of scoping
-;;; depth.
-;;;
-;;; A Fun struct packages a Code body together with all of the metadata
-;;; needed for code generation: the function name, self-reference key,
-;;; argument keys, and a flat table mapping binding keys to their Code
-;;; values.
-;;;
-;;; The =union-switch= macro dispatches on the head tag of a tagged
-;;; union (as produced by =deftype=).  It exists as a simple pattern
-;;; because it is easy to implement as a macro and makes dispatch code
-;;; somewhat readable.  Building this without *any* case dispatch is
-;;; not a good idea, but building a more complex =Case= before lambdas
-;;; is unrealistically difficult (you need lexical scope to implement
-;;; lexical scope).
 
 ;;; The R (letrec) node lays out its bindings as if they were a chain
 ;;; of nested lets: the first binding is outermost (farthest from the
