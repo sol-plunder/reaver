@@ -1,5 +1,5 @@
--- Copyright (c) 2026 Benjamin Summers
--- SPDX-License-Identifier: AGPL-3.0-only
+-- Copyright (c) 2026 xoCore Technologies, Benjamin Summers
+-- SPDX-License-Identifier: MIT
 -- See LICENSE for full terms.
 
 {-# LANGUAGE LambdaCase, ViewPatterns, BlockArguments #-}
