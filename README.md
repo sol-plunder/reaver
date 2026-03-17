@@ -5,6 +5,8 @@ the PLAN ISA.  Because Reaver is implemented directly in
 PLAN, any implementation of PLAN should be able to run
 this code.
 
+This will eventually be integrated with the production runtime (https://github.com/xocore-tech/PLAN), but isn't yet.
+
 A simple reference implementation of PLAN and
 Wisp is also included, which is sufficient for testing Reaver, but which is not going to
 have the performance or scalability needed for real applications.
