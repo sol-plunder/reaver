@@ -1,22 +1,32 @@
 {
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
 
-  outputs = { self, nixpkgs }: {
-    devShells.x86_64-linux.default =
-      let
-        pkgs = nixpkgs.legacyPackages.x86_64-linux;
-        ghcEnv = pkgs.haskellPackages.ghcWithPackages (hp: with hp; [
-          text primitive pretty-show containers deepseq
-          optics ghc-prim mtl transformers cryptohash-sha256
-          base58-bytestring vector
-        ]);
-      in
-        pkgs.mkShell {
-          packages = [
-            ghcEnv
-            pkgs.haskellPackages.ghcid
-            pkgs.haskellPackages.stylish-haskell
-          ];
-        };
-  };
+  outputs = { self, nixpkgs }:
+    let
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = f: nixpkgs.lib.genAttrs systems f;
+    in {
+      devShells = forAllSystems (system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          ghcEnv = pkgs.haskellPackages.ghcWithPackages (hp: with hp; [
+            text primitive pretty-show containers deepseq
+            optics ghc-prim mtl transformers cryptohash-sha256
+            base58-bytestring vector
+          ]);
+        in {
+          default = pkgs.mkShell {
+            packages = [
+              ghcEnv
+              pkgs.haskellPackages.ghcid
+              pkgs.haskellPackages.stylish-haskell
+            ];
+          };
+        });
+    };
 }
