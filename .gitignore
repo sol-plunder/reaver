@@ -4,5 +4,4 @@ snap/
 wisp/all.wisp
 .build
 .direnv
-x
 *.swp

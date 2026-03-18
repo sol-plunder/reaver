@@ -1,0 +1,7 @@
+set -ex
+
+rm -f src/plan/all.plan
+(cd src/plan; ls | sed 's/.plan$//; s/^/@/') | sponge src/plan/all.plan
+ghc -O2 -isrc/hs -outputdir .build -main-is Wisp Wisp -o Wisp
+time ./Wisp src/plan all
+rm -f src/plan/all.plan

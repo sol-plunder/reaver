@@ -1,0 +1,31 @@
+set -ex
+
+hsbuild () {
+	ghc -O2 -isrc/hs -outputdir .build -main-is Wisp src/hs/Wisp.hs -o Wisp
+}
+
+reset () {
+	./Wisp src/plan reaver main
+}
+
+repl () {
+	./Wisp snap root _ # run from snapshot
+}
+
+load_stdlib () {
+    repl <<EOF
+(#bind stdlib (#module stdlib))
+(#import stdlib)
+:todo
+(#import todo)
+EOF
+}
+
+
+hsbuild
+
+if [[ "$1" == "--reset" || ! -e snap/root.plan ]]
+then reset; load_stdlib
+fi
+
+repl
