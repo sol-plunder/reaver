@@ -62,7 +62,8 @@ exec (P _ _ (N o))       e = op o (unapp (e!!0))
 exec (A f x)         e = exec f (V.toList x <> e)
 exec f@(L a m b)     e = judge a (reverse (f : e)) b
 exec f@(P _ _ (L a m b)) e = judge a (reverse (f : e)) b
-exec (P _ _ x)           e = error $ show ("running bad pin", x, e)
+exec (P _ _ A{})         _ = error "tried to run a pinned app"
+exec (P _ _ P{})         _ = error "tried to run a pinned pin"
 
 kal :: Natural -> [Val] -> Val -> Val
 kal n e expr = case unapp expr of

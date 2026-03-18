@@ -72,7 +72,7 @@
     (Ifz (Eq 2 (Sz form)) error("bad-macro-call" ":*" "wrong-size")
       (#let ((nm (_1 form)))
         (Ifz (Nat nm) error("bad-macro-call" ":*" "expected-symbol")
-         [u g [(2 : nm) ["#import" nm]]])))))
+         [u g [0 (2 : nm) ["#import" nm]]])))))
 
 :*scratch
 zero

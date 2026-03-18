@@ -161,7 +161,6 @@ thunk top = case unapp top of
     _        -> fmap apple $ traverse thunk $ listElems "thunk" top
 
 data Macro = PIN | LAW | APP | BIND | MACRO | EXPORT | USER Val
-  deriving Show
 
 expand1 :: Macro -> Val -> IO Val
 expand1 mac x = do

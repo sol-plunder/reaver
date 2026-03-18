@@ -23,7 +23,7 @@ data Val
     | L !Natural Val Val
     | A !Val !(Vector Val)
     | N !Natural
-  deriving (Show, Generic)
+  deriving (Generic)
 
 instance NFData Val where
     rnf (P _ _ v) = rnf v
