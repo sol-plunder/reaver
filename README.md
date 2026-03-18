@@ -28,6 +28,13 @@ so that you can easily see everything that's going on.
 
 Just run `x/reaver` to build everything and get a Reaver REPL.
 
+You can use `rlwrap x/reaver` to get line-editing for now, eventually
+we will implement actual line-editing in the system.
+
+In Reaver, you can use `:*module` to reload a module and import all of
+it's bindings.  It use the last-written timestamp to determine if the
+file needs to be reloaded, so this is pretty fast.
+
 `flake.nix` should be pull in all of the dependencies that you need
 for this.  If you don't use Nix, then it's just a simple Haskell
 program with a few standard dependencies.  Just look at `flake.nix`
