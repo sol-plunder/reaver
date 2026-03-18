@@ -26,10 +26,10 @@ Three kinds of brackets are available. Parentheses produce a plain list;
 square brackets and curlies produce tagged lists:
 
     (f x y)      ; standard list: (f x y)
-    [a b c]      ; expands to: (BRAK a b c)
-    {a b c}      ; expands to: (CURL a b c)
+    [a b c]      ; expands to: (#brak a b c)
+    {a b c}      ; expands to: (#curl a b c)
 
-`BRAK` and `CURL` are just tags. Their meaning is entirely determined by
+`#brak` and `#curl` are just tags. Their meaning is entirely determined by
 whatever macros are in scope. Common conventions are to use `[...]` for
 data literals or pattern lists, and `{...}` for lambda shorthand, but
 these are not built in.
@@ -37,21 +37,21 @@ these are not built in.
 ### Juxtaposition
 
 If a token is immediately followed by a bracketed form with no space
-between them, it becomes a `JUXT` node:
+between them, it becomes a `#juxt` node:
 
-    f(x y)     ->  (JUXT f (x y))
-    f[a b]     ->  (JUXT f (BRAK a b))
-    f{a b}     ->  (JUXT f (CURL a b))
+    f(x y)     ->  (#juxt f (x y))
+    f[a b]     ->  (#juxt f (#brak a b))
+    f{a b}     ->  (#juxt f (#curl a b))
 
 This is how many Scheme-style "special" syntaxes can be supported as
 macros. For example, quoting and quasiquotation are not built in to
-Reaver, but because runic characters like `'` and `` ` `` produce `JUXT`
+Reaver, but because runic characters like `'` and `` ` `` produce `#juxt`
 nodes, a macro can give them their conventional meaning:
 
-    'foo        ->  (JUXT ' foo)
-    `(a ,b)     ->  (JUXT ` (a (JUXT , b)))
+    'foo        ->  (#juxt ' foo)
+    `(a ,b)     ->  (#juxt ` (a (#juxt , b)))
 
-A macro that handles `'` rewrites `(JUXT ' x)` to `(quote x)`, and
+A macro that handles `'` rewrites `(#juxt ' x)` to `(quote x)`, and
 similarly for `\``, `,`, and `,@`. The standard quote/quasiquote
 syntax is thus fully available even though it is not a primitive.
 
@@ -62,11 +62,11 @@ These characters are "runic":
     !,+'@.?*/<=>&^~:%`
 
 Runes written *between* tokens with no spaces form infix expressions,
-also represented as `JUXT` nodes:
+also represented as `#juxt` nodes:
 
-    Foo.bar      ->  (JUXT . Foo bar)
-    a+b          ->  (JUXT + a b)
-    a+b+c        ->  (JUXT + a b c)   ; same operator chains into one node
+    Foo.bar      ->  (#juxt . Foo bar)
+    a+b          ->  (#juxt + a b)
+    a+b+c        ->  (#juxt + a b c)   ; same operator chains into one node
 
 Precedence is intrinsic to the characters themselves. Characters
 appearing later in this sequence:
@@ -94,10 +94,10 @@ s-expressions directly.
 | `n` (any nat)             | Symbol --- the packed string of the name        |
 | `(1 v)`                   | Atom --- the PLAN value `v` embedded directly   |
 | `(0 x ...)`               | Parenthesised list                              |
-| `(0 "BRAK" x ...)`        | Bracket list `[x ...]`                          |
-| `(0 "CURL" x ...)`        | Curly list `{x ...}`                            |
-| `(0 "JUXT" s x)`          | Juxtaposition `s` immediately followed by `x`   |
-| `(0 "JUXT" op x y ...)`   | Infix `x op y op ...`                           |
+| `(0 "#brak" x ...)`       | Bracket list `[x ...]`                          |
+| `(0 "#curl" x ...)`       | Curly list `{x ...}`                            |
+| `(0 "#juxt" s x)`         | Juxtaposition `s` immediately followed by `x`   |
+| `(0 "#juxt" op x y ...)`  | Infix `x op y op ...`                           |
 | `(2 macro arg ...)`       | Pre-resolved macro call (see below)             |
 
 ### Atom Embedding: `(1 val)`
@@ -349,7 +349,7 @@ all expected to be provided by a macro layer:
 - `begin` --- sequencing
 - `and`, `or`, `not` --- boolean combinators
 - `quote`, `quasiquote` --- data literals (but `'` and `` ` `` syntax is
-  available via `JUXT`)
+  available via `#juxt`)
 - `syntax-rules` --- declarative pattern-matching macros
 - `let-syntax`, `letrec-syntax` --- hygienic local macro binding (built
   on `#letmacro`)

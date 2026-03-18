@@ -2,6 +2,8 @@
 ;;;; SPDX-License-Identifier: MIT
 ;;;; See LICENSE for full terms.
 
+; TODO: this is dead code.  Nuke it.
+
 @riv
 
 ;;;; This implements a reader, a printer, and an extensible REPL flow
@@ -29,12 +31,12 @@
 ;;;;
 ;;;; Here is all of the syntactic sugar:
 ;;;;
-;;;;     [..]  = (BRAK ..)
-;;;;     {..}  = (CURL ..)
-;;;;     x(..) = (JUXT x (..))
-;;;;     x[..] = (JUXT x [..])
-;;;;     x{..} = (JUXT x {..})
-;;;;     x".." = (JUXT x "..")
+;;;;     [..]  = (#brak ..)
+;;;;     {..}  = (#curl ..)
+;;;;     x(..) = (#juxt x (..))
+;;;;     x[..] = (#juxt x [..])
+;;;;     x{..} = (#juxt x {..})
+;;;;     x".." = (#juxt x "..")
 
 ;;; Reader ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -65,7 +67,7 @@
   (prefix read s0 {item s1[c] ->
     (Ifz (Test c opnChr) (k item s1)
       (read s1 {x s2 ->
-        (k (0 "JUXT" item x) s2)}))}))
+        (k (0 "#juxt" item x) s2)}))}))
 
 (tests
   ((juxt symbol "read" ["1" ["2" [" " ["("]]]] 0)
@@ -103,9 +105,9 @@
           (nestloop read mk end (acc item) rest k)})))))
 
 (define (nested read stream[c cs] k)
-  (If (Eq c "(") (nestloop read id              ")" 0 cs k)
-    (If (Eq c "[") (nestloop read (cons "BRAK") "]" 0 cs k)
-      (nestloop read (cons "CURL") "}" 0 cs k))))
+  (If (Eq c "(") (nestloop read id               ")" 0 cs k)
+    (If (Eq c "[") (nestloop read (cons "#brak") "]" 0 cs k)
+      (nestloop read (cons "#curl") "}" 0 cs k))))
 
 (define (expLoadStr cs)
   (limplode (ltakeWhile (Ne dquote) cs)))
@@ -151,13 +153,13 @@
 (define end (lexplode " #"))
 
 (tests
-  ((0 "asdf"                       end) (read ex1 0))
-  ((0 (1 123)                      end) (read ex2 0))
-  ((0 (1 "asdf")                   end) (read ex3 0))
-  ((0 ["a" "b" "c"]                end) (read ex4 0))
-  ((0 ["JUXT" "foo" ["a" "b" "c"]] end) (read ex5 0))
-  ((0 ["CURL" "a" "b" "c"]         end) (read ex6 0))
-  ((0 ["BRAK" "a" "b" "c"]         end) (read ex7 0)))
+  ((0 "asdf"                        end) (read ex1 0))
+  ((0 (1 123)                       end) (read ex2 0))
+  ((0 (1 "asdf")                    end) (read ex3 0))
+  ((0 ["a" "b" "c"]                 end) (read ex4 0))
+  ((0 ["#juxt" "foo" ["a" "b" "c"]] end) (read ex5 0))
+  ((0 ["#curl" "a" "b" "c"]         end) (read ex6 0))
+  ((0 ["#brak" "a" "b" "c"]         end) (read ex7 0)))
 
 
 ;;; Printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -166,7 +168,7 @@
 ;;
 ;; NAME n      -> n (a symbol, printed as-is)
 ;; ATOM (1 v)  -> number or quoted string or *plan*
-;; EXPR (0 x..) -> parenthesized, with sugar for BRAK/CURL/JUXT
+;; EXPR (0 x..) -> parenthesized, with sugar for #brak/#curl/#juxt
 
 ;; Is this nat a printable string?  (non-zero, all bytes printable)
 (define (isString n)
@@ -245,7 +247,7 @@
 (define (isExpr x)
   (And (Nil (IsNat x)) (Eq 0 (Hd x))))
 
-;; Is x an EXPR with head tag t?  (e.g. "BRAK", "CURL", "JUXT")
+;; Is x an EXPR with head tag t?  (e.g. "#brak", "#curl", "#juxt")
 (define (isTagged t x)
   (And (isExpr x) (Gt (Sz x) 1) (Eq t (Ix 0 x))))
 
@@ -257,19 +259,19 @@
   ( (showParen (const "hi") [1 2 3])
     "(hi hi hi)" ))
 
-;; (BRAK x..) -> "[x1 x2 x3]"
+;; (#brak x..) -> "[x1 x2 x3]"
 (define (showBrak go x)
   (lstrcat ~["[" (showExprs go (stream-from 1 x)) "]"]))
 
-;; (CURL x..) -> "{x1 x2 x3}"
+;; (#curl x..) -> "{x1 x2 x3}"
 (define (showCurl go x)
   (lstrcat ~["{" (showExprs go (stream-from 1 x)) "}"]))
 
-;; Show a JUXT form: prefix immediately followed by argument.
-;; JUXT x [..]  -> x[..]
-;; JUXT x {..}  -> x{..}
-;; JUXT x (..)  -> x(..)
-;; JUXT x "str" -> x"str"
+;; Show a #juxt form: prefix immediately followed by argument.
+;; #juxt x [..]  -> x[..]
+;; #juxt x {..}  -> x{..}
+;; #juxt x (..)  -> x(..)
+;; #juxt x "str" -> x"str"
 (define (showJuxt go x)
   (strWeld (go (Ix1 x)) (go (Ix2 x))))
 
@@ -281,9 +283,9 @@
   (let ((tag (Ix0 x)))
     (If (IsNat x) (showSymbol x)
       (If (Eq 1 (Hd x)) (showAtom (Ix0 x))
-        (If (Eq "JUXT" tag) (showJuxt showExpr x)
-          (If (Eq "BRAK" tag) (showBrak showExpr x)
-            (If (Eq "CURL" tag) (showCurl showExpr x)
+        (If (Eq "#juxt" tag) (showJuxt showExpr x)
+          (If (Eq "#brak" tag) (showBrak showExpr x)
+            (If (Eq "#curl" tag) (showCurl showExpr x)
               (showParen showExpr x))))))))
 
 (define helloex
@@ -296,11 +298,11 @@
   (helloex        (showExpr (1 "hello")))
   ("{<{Inc}>}"    (showExpr (1 Inc)))
   ("(f x y)"      (showExpr (0 "f" "x" "y")))
-  ("[a b c]"      (showExpr (0 "BRAK" "a" "b" "c")))
-  ("{a b c}"      (showExpr (0 "CURL" "a" "b" "c")))
-  ("f(a b)"       (showExpr (0 "JUXT" "f" (0 "a" "b"))))
-  ("f[a b]"       (showExpr (0 "JUXT" "f" (0 "BRAK" "a" "b"))))
-  ("f{a b}"       (showExpr (0 "JUXT" "f" (0 "CURL" "a" "b"))))
+  ("[a b c]"      (showExpr (0 "#brak" "a" "b" "c")))
+  ("{a b c}"      (showExpr (0 "#curl" "a" "b" "c")))
+  ("f(a b)"       (showExpr (0 "#juxt" "f" (0 "a" "b"))))
+  ("f[a b]"       (showExpr (0 "#juxt" "f" (0 "#brak" "a" "b"))))
+  ("f{a b}"       (showExpr (0 "#juxt" "f" (0 "#curl" "a" "b"))))
   ("(f (g x) y)"  (showExpr (0 "f" (0 "g" "x") "y"))))
 
 (tests
@@ -411,27 +413,27 @@
 (define (flatParen go x)
   (lweld ["(" NIL] (lweld (flatExprs go (stream-from 0 x)) [")" NIL])))
 
-;; Flat fragments for wisp BRAK: [x1 x2 x3]
+;; Flat fragments for wisp #brak: [x1 x2 x3]
 (define (flatBrak go x)
   (lweld ["[" NIL] (lweld (flatExprs go (stream-from 1 x)) ["]" NIL])))
 
-;; Flat fragments for wisp CURL: {x1 x2 x3}
+;; Flat fragments for wisp #curl: {x1 x2 x3}
 (define (flatCurl go x)
   (lweld ["{" NIL] (lweld (flatExprs go (stream-from 1 x)) ["}" NIL])))
 
-;; Flat fragments for wisp JUXT: prefix followed by argument.
+;; Flat fragments for wisp #juxt: prefix followed by argument.
 (define (flatJuxt go x[_ a b])
   (lweld (go a) (go b)))
 
 ;; Flat fragments for a wisp expression.
 (define (flatExpr x[tag])
   (cond
-    ((IsNat x)       [x NIL])
-    ((Eq 1 (Hd x))   (flatAtom (Ix0 x)))
-    ((Eq "JUXT" tag) (flatJuxt flatExpr x))
-    ((Eq "BRAK" tag) (flatBrak flatExpr x))
-    ((Eq "CURL" tag) (flatCurl flatExpr x))
-    (else            (flatParen flatExpr x))))
+    ((IsNat x)        [x NIL])
+    ((Eq 1 (Hd x))    (flatAtom (Ix0 x)))
+    ((Eq "#juxt" tag) (flatJuxt flatExpr x))
+    ((Eq "#brak" tag) (flatBrak flatExpr x))
+    ((Eq "#curl" tag) (flatCurl flatExpr x))
+    (else             (flatParen flatExpr x))))
 
 ;;; Pretty printers (use tryFlat with lazy fragments) ;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -453,7 +455,7 @@
            (lines (prettyLines go wid ind2 elems)))
       (lstrcat ~["(" newline (unlines (lmap (indent ind2) lines)) ")"]))))
 
-;; Pretty-print a wisp BRAK.
+;; Pretty-print a wisp #brak.
 (define (prettyBrak go wid ind x)
   (tryFlat wid (flatBrak flatExpr x)
     (let* ((elems (stream-from 1 x))
@@ -461,7 +463,7 @@
            (lines (prettyLines go wid ind2 elems)))
       (lstrcat ~["[" newline (unlines (lmap (indent ind2) lines)) "]"]))))
 
-;; Pretty-print a wisp CURL.
+;; Pretty-print a wisp #curl.
 (define (prettyCurl go wid ind x)
   (tryFlat wid (flatCurl flatExpr x)
     (let* ((elems (stream-from 1 x))
@@ -469,7 +471,7 @@
            (lines (prettyLines go wid ind2 elems)))
       (lstrcat ~["{" newline (unlines (lmap (indent ind2) lines)) "}"]))))
 
-;; Pretty-print a wisp JUXT.
+;; Pretty-print a wisp #juxt.
 (define (prettyJuxt go wid ind x[_ a b])
   (tryFlat wid (flatJuxt flatExpr x)
     (strWeld (go wid ind a) (go wid ind b))))
@@ -480,12 +482,12 @@
 ;; Pretty-print a wisp expression.
 (define (prettyExpr wid ind x[tag])
   (cond
-    ((IsNat x)       (showSymbol x))
-    ((Eq 1 (Hd x))   (lstrcat (flatAtom (Ix0 x))))
-    ((Eq "JUXT" tag) (prettyJuxt prettyExpr wid ind x))
-    ((Eq "BRAK" tag) (prettyBrak prettyExpr wid ind x))
-    ((Eq "CURL" tag) (prettyCurl prettyExpr wid ind x))
-    (else            (prettyParen prettyExpr wid ind x))))
+    ((IsNat x)        (showSymbol x))
+    ((Eq 1 (Hd x))    (lstrcat (flatAtom (Ix0 x))))
+    ((Eq "#juxt" tag) (prettyJuxt prettyExpr wid ind x))
+    ((Eq "#brak" tag) (prettyBrak prettyExpr wid ind x))
+    ((Eq "#curl" tag) (prettyCurl prettyExpr wid ind x))
+    (else             (prettyParen prettyExpr wid ind x))))
 
 ;; Pretty-print PLAN fields in brackets.
 (define (prettyFields go wid ind x)
@@ -547,7 +549,7 @@
 ;; Test: scanFlat returns string when short enough.
 (tests
   ("(a b c)"      (scanFlat 60 (flatParen flatExpr (0 "a" "b" "c"))))
-  ("[a b]"        (scanFlat 60 (flatBrak flatExpr (0 "BRAK" "a" "b")))))
+  ("[a b]"        (scanFlat 60 (flatBrak flatExpr (0 "#brak" "a" "b")))))
 
 ;; Test: scanFlat returns 0 when too wide.
 (tests
@@ -562,9 +564,9 @@
 ;; Test: short expressions stay flat.
 (tests
   ("(f x y)"      (prettyExprStr 60 (0 "f" "x" "y")))
-  ("[a b c]"      (prettyExprStr 60 (0 "BRAK" "a" "b" "c")))
-  ("{a b c}"      (prettyExprStr 60 (0 "CURL" "a" "b" "c")))
-  ("f(a b)"       (prettyExprStr 60 (0 "JUXT" "f" (0 "a" "b"))))
+  ("[a b c]"      (prettyExprStr 60 (0 "#brak" "a" "b" "c")))
+  ("{a b c}"      (prettyExprStr 60 (0 "#curl" "a" "b" "c")))
+  ("f(a b)"       (prettyExprStr 60 (0 "#juxt" "f" (0 "a" "b"))))
   ("42"           (prettyPlanStr 60 42))
   ("<{Inc}>"      (prettyPlanStr 60 Inc))
   ("[1 2 3]"      (prettyPlanStr 60 (0 1 2 3)))
@@ -576,10 +578,10 @@
    (prettyExprStr 5 (0 "f" "x" "y" "z")))
 
   ((unlines ~["[" "  a" "  b" "  c]"])
-   (prettyExprStr 5 (0 "BRAK" "a" "b" "c")))
+   (prettyExprStr 5 (0 "#brak" "a" "b" "c")))
 
   ((unlines ~["{" "  a" "  b" "  c}"])
-   (prettyExprStr 5 (0 "CURL" "a" "b" "c")))
+   (prettyExprStr 5 (0 "#curl" "a" "b" "c")))
 
   ((unlines ~["[" "  1" "  2" "  3]"])
    (prettyPlanStr 5 (0 1 2 3)))

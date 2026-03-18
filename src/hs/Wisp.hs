@@ -53,10 +53,10 @@ listE :: [Val] -> Val
 listE xs = array xs
 
 curlE :: [Val] -> Val
-curlE xs = array (N "CURL" : xs)
+curlE xs = array (N "#curl" : xs)
 
 brakE :: [Val] -> Val
-brakE xs = array (N "BRAK" : xs)
+brakE xs = array (N "#brak" : xs)
 
 data CharType = GAP | SYM | STR | END | NEST ([Val] -> Val)
 
@@ -90,12 +90,12 @@ parse s0 = case eat s0 of
                      case r of
                          (cat -> NEST mk):ys ->
                              let (i,s3) = pseq mk ys
-                             in (array [N "JUXT", v, i], s3)
+                             in (array [N "#juxt", v, i], s3)
                          '"':ys ->
                              let (i,s3) = case break (=='"') ys of
                                     (body, '"':rest) -> (strE body, rest)
                                     _                -> error "unterminated string"
-                             in (array [N "JUXT", v, i], s3)
+                             in (array [N "#juxt", v, i], s3)
                          _                       -> (v, r)
 
     isSymChar c = case cat c of SYM -> True; _ -> False
@@ -217,9 +217,9 @@ macroexpand loc = go
   where
     go v = case unapp v of
         -- #(foo) forms are law syntax
-        [N 0, "JUXT", "#", x] | not (null loc) -> do
+        [N 0, "#juxt", "#", x] | not (null loc) -> do
             xo <- macroexpand loc x
-            pure $! array ["JUXT", "#", xo]
+            pure $! array ["#juxt", "#", xo]
 
         N 0 : xs -> getmacro xs >>= \case
                         Nothing  -> array <$> traverse go xs
@@ -277,7 +277,7 @@ lawExp tagForm sigForm forms = do
                                ++ zip binds [fromIntegral (length args) + 1 ..]
 
     parseBind v = case listElems "bind" v of
-        ["JUXT", N nm, expr] -> pure (nm, expr)
+        ["#juxt", N nm, expr] -> pure (nm, expr)
         _ -> error ("law: bad bind: " <> showVal v)
 
     ix0 x = case unapp x of _:xs@(_:_) -> last xs; _ -> N 0
@@ -303,7 +303,7 @@ compileExpr locals = \case
 
     x@(A (N 0) xs) -> do
         case V.toList xs of
-            ["JUXT", "#", expr] -> eval expr
+            ["#juxt", "#", expr] -> eval expr
             _ -> do
                 let f:as = V.toList xs
                 f'  <- compileExpr locals f

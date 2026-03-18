@@ -356,13 +356,13 @@ assert(Nil ((lambdarec (countdown n)
 (define (is-brak? x)
   (And (Nil (IsNat x))
     (And (Nil (Hd x))
-      (Eq "BRAK" (.0 x)))))
+      (Eq "#brak" (.0 x)))))
 
 (define (is-juxt-brak? x)
   (And (Nil (IsNat x))
     (And (Nil (Hd x))
       (And (Eq 3 (Sz x))
-        (And (Eq "JUXT" (.0 x))
+        (And (Eq "#juxt" (.0 x))
           (is-brak? (.2 x)))))))
 
 ;; is-juxt-brak?
@@ -451,7 +451,7 @@ assert(Eq 7 (begin
   ( [["a" ["Ix" (1 0) "r"]]
      ["b" ["Ix" (1 1) "r"]]
      ["c" ["Ix" (1 2) "r"]]]
-    (field-binds [["JUXT" "r" ["BRAK" "a" "b" "c"]] "val"])))
+    (field-binds [["#juxt" "r" ["#brak" "a" "b" "c"]] "val"])))
 
 (tests
   ([]  (field-binds ["x" "val"]))
@@ -594,7 +594,7 @@ assert(Eq 1 (letrec ((even (lambda (n) (If (Nil n) 1 (odd (Dec n)))))
                      (odd  (lambda (n) (If (Nil n) 0 (even (Dec n))))))
               (even 4)))
 
-(define-syntax (CURL ws x)
+(define-syntax (#curl ws x)
   (let* ((split[head args body] (splitArrow 0 (drop 1 x)))
          (args  (Ix1 split))
          (body  (Ix2 split)))

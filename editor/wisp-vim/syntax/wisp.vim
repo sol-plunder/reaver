@@ -23,7 +23,7 @@ syn match wispNumber "\<\d\+\>"
 
 " ---------- Special forms (builtins) ----------
 syn keyword wispSpecial LAW EVAL PIN
-syn match   wispSpecial "\<JUXT\>"
+syn match   wispSpecial "\<#juxt\>"
 syn match   wispDefine  "^(\s*\zs="
 syn match   wispDefine  "^(\s*\zs:="
 syn match   wispDefine  "\%((\s*\)\@<==" 
@@ -38,7 +38,7 @@ syn match wispBind "(\s*@\>"
 " ---------- File inclusion ----------
 syn match wispInclude "^<\S\+"
 
-" ---------- Brackets and braces (JUXT / CURL sugar) ----------
+" ---------- Brackets and braces (#juxt / #curl sugar) ----------
 syn match wispDelimiter "[()\[\]{}]"
 
 " ---------- Zero ----------

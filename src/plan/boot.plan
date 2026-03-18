@@ -222,9 +222,9 @@
 (defun (print x)
   (Trace x x))
 
-; x(y) => (JUXT x y) => (x y)
+; x(y) => (#juxt x y) => (x y)
 
-(defmacro (JUXT e x)
+(defmacro (#juxt e x)
   (0 (Ix 1 x) (Ix 2 x)))
 
 print(3)

@@ -40,9 +40,9 @@
     ((IsNat x)        [x NIL])
     ((Eq 1 (Hd x))    (flatAtom (Ix0 x)))
     ((Eq "LOC" tag)   (flatExpr (Ix2 x)))
-    ((Eq "JUXT" tag)  (lweld (flatExpr (Ix1 x)) (flatExpr (Ix2 x))))
-    ((Eq "BRAK" tag)  (lweld ["[" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["]" NIL])))
-    ((Eq "CURL" tag)  (lweld ["{" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["}" NIL])))
+    ((Eq "#juxt" tag)  (lweld (flatExpr (Ix1 x)) (flatExpr (Ix2 x))))
+    ((Eq "#brak" tag)  (lweld ["[" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["]" NIL])))
+    ((Eq "#curl" tag)  (lweld ["{" NIL] (lweld (flatExprs flatExpr (stream-from 1 x)) ["}" NIL])))
     (else             (lweld ["(" NIL] (lweld (flatExprs flatExpr (stream-from 0 x)) [")" NIL])))))
 
 ;;; Pretty printer ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -122,12 +122,12 @@
     ((IsNat x)        x)
     ((Eq 1 (Hd x))    (lstrcat (flatAtom (Ix0 x))))
     ((Eq "LOC" tag)   (prettyExpr wid ind (Ix2 x)))
-    ((Eq "JUXT" tag)  (define s   (Ix1 x))
+    ((Eq "#juxt" tag) (define s   (Ix1 x))
                       (define arg (Ix2 x))
                       (strWeld s
                         (prettyExpr wid (Add ind (Bytes s)) arg)))
-    ((Eq "BRAK" tag)  (prettyList prettyExpr wid ind "[" "]" (stream-from 1 x)))
-    ((Eq "CURL" tag)  (prettyList prettyExpr wid ind "{" "}" (stream-from 1 x)))
+    ((Eq "#brak" tag) (prettyList prettyExpr wid ind "[" "]" (stream-from 1 x)))
+    ((Eq "#curl" tag) (prettyList prettyExpr wid ind "{" "}" (stream-from 1 x)))
     (else             (prettyList prettyExpr wid ind "(" ")" (stream-from 0 x)))))
 
 ; prettyWexp : Nat -> Sexp -> Str
@@ -140,9 +140,9 @@
   ("foo"      (prettyWexp 60 "foo"))
   ("42"       (prettyWexp 60 (1 42)))
   ("(f x y)"  (prettyWexp 60 (0 "f" "x" "y")))
-  ("[a b c]"  (prettyWexp 60 (0 "BRAK" "a" "b" "c")))
-  ("{a b c}"  (prettyWexp 60 (0 "CURL" "a" "b" "c")))
-  ("f(a b)"   (prettyWexp 60 (0 "JUXT" "f" (0 "a" "b"))))
+  ("[a b c]"  (prettyWexp 60 (0 "#brak" "a" "b" "c")))
+  ("{a b c}"  (prettyWexp 60 (0 "#curl" "a" "b" "c")))
+  ("f(a b)"   (prettyWexp 60 (0 "#juxt" "f" (0 "a" "b"))))
   ("foo"      (prettyWexp 60 (0 "LOC" (1 (0 1 1)) "foo"))))
 
 

@@ -13,13 +13,13 @@
 ;;;; an AST of PLAN values.
 ;;;;
 ;;;; Sexp representation:
-;;;;   n                     -> symbol (packed NAT)
-;;;;   (1 v)                 -> atom (embedded PLAN value)
-;;;;   (0 x..)               -> paren
-;;;;   (0 "BRAK" x..)        -> brackets [..]
-;;;;   (0 "CURL" x..)        -> curlies {..}
-;;;;   (0 "JUXT" s x)        -> juxtaposition: s immediately followed by x
-;;;;   (0 "JUXT" "+" x y z)  -> juxtaposed infix (no spaces): x+y+z
+;;;;   n                      -> symbol (packed NAT)
+;;;;   (1 v)                  -> atom (embedded PLAN value)
+;;;;   (0 x..)                -> paren
+;;;;   (0 "#brak" x..)        -> brackets [..]
+;;;;   (0 "#curl" x..)        -> curlies {..}
+;;;;   (0 "#juxt" s x)        -> juxtaposition: s immediately followed by x
+;;;;   (0 "#juxt" "+" x y z)  -> juxtaposed infix (no spaces): x+y+z
 ;;;;
 ;;;; Token types (tags 0-6):
 ;;;;   0 = TT_SPACE   1 = TT_OPEN    2 = TT_CLOSE
@@ -585,7 +585,7 @@
 ; juxtE : Array Sexp -> Sexp
 (define (juxtE forms[f0])
   (If (Eq 1 (Sz forms)) f0
-    (Weld ["JUXT"] forms)))
+    (Weld ["#juxt"] forms)))
 
 ; infix-group : List Str -> List Elem -> Sexp
 (define (infix-group runes[rune more-runes] elems[e0 more])
@@ -594,7 +594,7 @@
       (If (Nil more-groups)
         (infix-group more-runes elems) ; rune not present
         (lfoldl {acc g -> (acc (infix-group more-runes g))}
-                ["JUXT" rune]
+                ["#juxt" rune]
                 groups)))))
 
 (define (^ x)
@@ -605,20 +605,20 @@
 (define (runic all)
   (define (go elems[e es])
     (cond
-      ((rune-form? e) (Ifz es e ["JUXT" e (go es)]))              ; prefix
+      ((rune-form? e) (Ifz es e ["#juxt" e (go es)]))              ; prefix
       ((Nil es)       (form-sexp e))                              ; single
       (else           (infix-group (sorted-runes elems) elems)))) ; infix
   (go (stream all)))
 
 (tests
-  ("foo"                                 (runic [["foo"]]))
-  (["JUXT" "foo" (1 "foo")]              (runic [["foo"] [1"foo"]]))
-  ("+"                                   (runic ["+"]))
-  (["JUXT" "+" "foo"]                    (runic ["+" ["foo"]]))
-  (["JUXT" "." "a" "b"]                  (runic [["a"] "." ["b"]]))
-  (["JUXT" "." "a" "b" "c"]              (runic [["a"] "." ["b"] "." ["c"]]))
-  (["JUXT" "+" "a" ["JUXT" "." "b" "c"]] (runic [["a"] "+" ["b"] "." ["c"]]))
-  (["JUXT" "+" ["JUXT" "." "a" "b"]]     (runic ["+" ["a"] "." ["b"]])))
+  ("foo"                                   (runic [["foo"]]))
+  (["#juxt" "foo" (1 "foo")]               (runic [["foo"] [1"foo"]]))
+  ("+"                                     (runic ["+"]))
+  (["#juxt" "+" "foo"]                     (runic ["+" ["foo"]]))
+  (["#juxt" "." "a" "b"]                   (runic [["a"] "." ["b"]]))
+  (["#juxt" "." "a" "b" "c"]               (runic [["a"] "." ["b"] "." ["c"]]))
+  (["#juxt" "+" "a" ["#juxt" "." "b" "c"]] (runic [["a"] "+" ["b"] "." ["c"]]))
+  (["#juxt" "+" ["#juxt" "." "a" "b"]]     (runic ["+" ["a"] "." ["b"]])))
 
 
 ;;; Tight sequence splitting ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -702,8 +702,8 @@
 ; list-prefix : Str -> Sexp
 (define (list-prefix open-char)
   (cond ((Eq open-char "(") 0)
-        ((Eq open-char "[") (0 "BRAK"))
-        (else               (0 "CURL"))))
+        ((Eq open-char "[") (0 "#brak"))
+        (else               (0 "#curl"))))
 
 ; parseList : List LocTok -> [Sexp, List LocTok]
 (define (parseList @[@1[_ _ @2[opener]] contents])
@@ -730,10 +730,10 @@
 (tests (["foo"]                        x"(foo)"))
 (tests (["foo" "bar"]                  x"(foo bar)"))
 (tests (["foo" ["bar" "zaz"]]          x"(foo (bar zaz))"))
-(tests (["foo" ["JUXT" "." "a" "b"]]   x"(foo a.b)"))
+(tests (["foo" ["#juxt" "." "a" "b"]]  x"(foo a.b)"))
 (tests ([["foo"] ["bar"]]              x"((foo)(bar))"))
-(tests (["BRAK" ["foo"] ["bar"]]       x"[(foo)(bar)]"))
-(tests ([["JUXT" "." ["foo"] "x"]]     x"((foo).x)"))
+(tests (["#brak" ["foo"] ["bar"]]      x"[(foo)(bar)]"))
+(tests ([["#juxt" "." ["foo"] "x"]]    x"((foo).x)"))
 
 
 ;;; Parser ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

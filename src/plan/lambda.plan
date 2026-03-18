@@ -76,7 +76,7 @@
 ;;;; This compiler code will be used for two different things:
 ;;;;
 ;;;; 1.  Right away within Wisp, to extend the syntax of the defun,
-;;;;     lambda, and CURL ({a -> b}) macros with additional
+;;;;     lambda, and #curl ({a -> b}) macros with additional
 ;;;;     expressiveness.
 ;;;;
 ;;;; 2.  As a foundational component of the Sire language, which is built

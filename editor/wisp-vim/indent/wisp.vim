@@ -10,7 +10,7 @@ setlocal indentexpr=WispIndent()
 setlocal indentkeys=0),0],0},o,O
 setlocal autoindent
 setlocal lisp
-setlocal lispwords==,:=,LAW,EVAL,PIN,JUXT,@
+setlocal lispwords==,:=,LAW,EVAL,PIN,#juxt,@
 
 function! WispIndent()
   let lnum = prevnonblank(v:lnum - 1)

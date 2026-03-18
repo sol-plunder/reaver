@@ -35,7 +35,7 @@
       (Ifz (Test c opnChr) (k item s1)
         (read s1
           {x s2 ->
-            (k (0 "JUXT" item x) s2)}))}))
+            (k (0 "#juxt" item x) s2)}))}))
 
 (tests
   ((juxt symbol "read" ["1" ["2" [" " ["("]]]] 0)
@@ -75,8 +75,8 @@
 
 (define (nested read stream[c cs] k)
   (If (Eq c "(") (nestloop read id              ")" 0 cs k)
-    (If (Eq c "[") (nestloop read (cons "BRAK") "]" 0 cs k)
-      (nestloop read (cons "CURL") "}" 0 cs k))))
+    (If (Eq c "[") (nestloop read (cons "#brak") "]" 0 cs k)
+      (nestloop read (cons "#curl") "}" 0 cs k))))
 
 (define (expLoadStr cs)
   (limplode (ltakeWhile (Ne dquote) cs)))
@@ -126,9 +126,9 @@
   ((0 (1 123)                      end) (read ex2 0))
   ((0 (1 "asdf")                   end) (read ex3 0))
   ((0 ["a" "b" "c"]                end) (read ex4 0))
-  ((0 ["JUXT" "foo" ["a" "b" "c"]] end) (read ex5 0))
-  ((0 ["CURL" "a" "b" "c"]         end) (read ex6 0))
-  ((0 ["BRAK" "a" "b" "c"]         end) (read ex7 0)))
+  ((0 ["#juxt" "foo" ["a" "b" "c"]] end) (read ex5 0))
+  ((0 ["#curl" "a" "b" "c"]         end) (read ex6 0))
+  ((0 ["#brak" "a" "b" "c"]         end) (read ex7 0)))
 
 (define (load sxp[_ sig[self]])
   (let* ((tag  (If (IsNat self) self (Ix0 self)))

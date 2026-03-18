@@ -26,10 +26,10 @@
 ;; just does mechanical things with prefix characters. A backtick, comma,
 ;; or comma-at on a symbol becomes part of the symbol: `` `foo `` →
 ;; `"\`foo"`,`,bar`→`",bar"`,`,@xs`→`",@xs"`. When these prefixes
-;; are followed by a compound form, the reader produces a JUXT:`,(Inc
-;; 3)`→`(JUXT "," (Inc 3))`. The reader also handles brackets:`\[a
-;; b\]`→`(BRAK a b)`. And juxtaposition of a symbol with brackets:`a\[b
-;; c\]`→`(JUXT "a" (BRAK b c))\`.
+;; are followed by a compound form, the reader produces a #juxt:`,(Inc
+;; 3)`→`(#juxt "," (Inc 3))`. The reader also handles brackets:`\[a
+;; b\]`→`(#brak a b)`. And juxtaposition of a symbol with brackets:`a\[b
+;; c\]`→`(#juxt "a" (#brak b c))\`.
 ;;
 ;; **Byte detection**: Since the reader bakes the prefix into the symbol,
 ;; we detect commas by checking the first byte of the nat:
@@ -37,11 +37,11 @@
 ;; (ASCII @). We strip prefixes with `Rsh` --- shifting right by 8 bits
 ;; drops one byte, 16 drops two.
 ;;
-;; **JUXT handling**: When `qq-element` sees a JUXT form, `qq-juxt-prefix`
+;; **#juxt handling**: When `qq-element` sees a #juxt form, `qq-juxt-prefix`
 ;; checks the prefix: exact `","` means compound unquote (the body is the
 ;; expression), exact `",@"` means compound splice, `",sym"` means the user
-;; wrote `,sym(args)` so we strip the comma and rebuild the JUXT as the
-;; unquoted expression. Non-comma JUXT (like quote) falls through to
+;; wrote `,sym(args)` so we strip the comma and rebuild the #juxt as the
+;; unquoted expression. Non-comma #juxt (like quote) falls through to
 ;; regular form processing.
 ;;
 ;; **The Compiled ADT**: Each element compiles to one of three tags:
@@ -201,19 +201,19 @@
 ;(define (is-juxt? x)
 ;  (And (is-expr? x)
 ;    (And (Eq 3 (Sz x))
-;      (Eq "JUXT" (.0 x)))))
+;      (Eq "#juxt" (.0 x)))))
 ;
 ;;; qq-juxt-prefix : Nat -> SExpr -> Compiled | 0
-;;; Handle JUXT forms with comma/splice prefixes.
+;;; Handle #juxt forms with comma/splice prefixes.
 ;;; Returns 0 if the prefix is not a comma form.
 ;(define (qq-juxt-prefix prefix body)
 ;  (cond
 ;    ((Eq "," prefix)            (CExpr body))
 ;    ((Eq ",@" prefix)           (CSplice body))
 ;    ((has-splice-prefix? prefix)
-;      (CSplice ["JUXT" (strip-splice prefix) body]))
+;      (CSplice ["#juxt" (strip-splice prefix) body]))
 ;    ((has-comma? prefix)
-;      (CExpr ["JUXT" (strip-comma prefix) body]))
+;      (CExpr ["#juxt" (strip-comma prefix) body]))
 ;    (else                       0)))
 ;
 ;(define (qq-element x)
@@ -254,20 +254,20 @@
 ;assert(planEq (CExpr [(1 cat) [(1 0) '((0 "a" "b")) "c" '((0 "d" "e"))]])
 ;              (qq-element '( (a b ,@c d e) )))
 ;
-;  ;; JUXT: ,(expr) → compound unquote
+;  ;; #juxt: ,(expr) → compound unquote
 ;assert(planEq (CExpr '((Inc 3)))
 ;              (qq-element '( ,(Inc 3) )))
 ;
-;  ;; JUXT: ,@(expr) → compound splice
+;  ;; #juxt: ,@(expr) → compound splice
 ;assert(planEq (CSplice '((foo bar)))
 ;              (qq-element '( ,@(foo bar) )))
 ;
-;  ;; JUXT: ,sym(args) → unquote of rebuilt JUXT
-;assert(planEq (CExpr ["JUXT" "a" '((3))])
+;  ;; #juxt: ,sym(args) → unquote of rebuilt #juxt
+;assert(planEq (CExpr ["#juxt" "a" '((3))])
 ;              (qq-element '( ,a(3) )))
 ;
-;  ;; JUXT: ,@sym(args) → splice of rebuilt JUXT
-;assert(planEq (CSplice ["JUXT" "a" '((3))])
+;  ;; #juxt: ,@sym(args) → splice of rebuilt #juxt
+;assert(planEq (CSplice ["#juxt" "a" '((3))])
 ;              (qq-element '( ,@a(3) )))
 ;
 ;;; ============================================================

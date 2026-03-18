@@ -86,7 +86,7 @@
 ;; are unchanged, but free variables need to get bigger to accommodate
 ;; the additional things in the enclosing environment.
 
-; TODO: reintroduce JUXT notation into branches (is is nicer).
+; TODO: reintroduce #juxt notation into branches (is is nicer).
 
 (patfun (move-to-loop from to l e)
   mv(move-to-loop from to)

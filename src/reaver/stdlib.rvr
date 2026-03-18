@@ -20,17 +20,17 @@
 
 ;;; Basic Syntactic Sugar ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(#macro BRAK
-  (#fun pin noinline "BRAK" (BRAK _ u g _ _ form)
+(#macro #brak
+  (#fun pin noinline "#brak" (#brak _ u g _ _ form)
     (0 u g
       (Up 0 (1 0) form))))
 
-; TODO: support JUXT infix
+; TODO: support #juxt infix
 
-(#macro JUXT
-  (#fun pin noinline "JUXT" (JUXT _ u g _ _ form)
+(#macro #juxt
+  (#fun pin noinline "#juxt" (#juxt _ u g _ _ form)
     (If (Ne 3 (Sz form))
-      (error ("bad-JUXT" form))
+      (error ("bad-#juxt" form))
       [u g
         [(_1 form) (_2 form)]])))
 
@@ -194,13 +194,13 @@ assert(Nil ((lambdarec (countdown n)
 (define (is-brak? x)
   (And (Nil (IsNat x))
     (And (Nil (Hd x))
-      (Eq "BRAK" (_0 x)))))
+      (Eq "#brak" (_0 x)))))
 
 (define (is-juxt-brak? x)
   (And (Nil (IsNat x))
     (And (Nil (Hd x))
       (And (Eq 3 (Sz x))
-        (And (Eq "JUXT" (_0 x))
+        (And (Eq "#juxt" (_0 x))
           (is-brak? (_2 x)))))))
 
 (define (binding-name b)
@@ -307,7 +307,7 @@ assert(Equal
   [["a" ["Ix" (1 0) "r"]]
    ["b" ["Ix" (1 1) "r"]]
    ["c" ["Ix" (1 2) "r"]]]
-  (field-binds [["JUXT" "r" ["BRAK" "a" "b" "c"]] "val"]))
+  (field-binds [["#juxt" "r" ["#brak" "a" "b" "c"]] "val"]))
 
 assert(Equal []  (field-binds ["x" "val"]))
 assert(Equal []  (field-binds ["y" (1 3)]))

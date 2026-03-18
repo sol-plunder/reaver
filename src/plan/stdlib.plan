@@ -140,10 +140,10 @@ assert(Eq 0       (Name const)     )
     (0 item (stream row))))
 
 ; [a b c] =>
-;   (BRAK (a b c)) =>
+;   (#brak (a b c)) =>
 ;     (0 a b c)
 
-(defmacro (BRAK st x)
+(defmacro (#brak st x)
   (Up 0 (1 0) x))
 
 assert(Eq 4 (Sz [1 2 3 4]))
@@ -308,7 +308,7 @@ assert(Eq "Hello wo" (Trunc64 "Hello world!"))  ;  indirect
 ; parse each test case
 ;
 ;     e@(x y)      [0 x y]
-;     e@(JUXT x y) [0 "JUXT" x y]
+;     e@(#juxt x y) [0 "#juxt" x y]
 ;         => [x y]
 ;
 ; this input
@@ -334,7 +334,7 @@ assert(Eq "Hello wo" (Trunc64 "Hello world!"))  ;  indirect
   (If (Hd expr) er
     (If (Eq 2 sz) [e0 e1]
       (Ifz (Eq 3 sz) er
-        (Ifz (Eq "JUXT" e0) er
+        (Ifz (Eq "#juxt" e0) er
           [e1 e2])))))
 
 
@@ -599,7 +599,7 @@ assert(Eq "Hello wo" (Trunc64 "Hello world!"))  ;  indirect
 
 ; TODO: just live without this until lambda.wisp
 
-(defmacro (CURL ws x)
+(defmacro (#curl ws x)
   (curly-syntax "#law" ws x))
 
 assert(Eq 3 ({a b -> b}   2 3))
@@ -959,11 +959,11 @@ assert(Eq 3 ({f a b => b} 2 3))
 (tests
   ("x"                       '(x))
   (["a" "b"]                 '((a b)))
-  (["BRAK" "a" "b"]          '([a b]))
-  (["JUXT" "x" ["a"]]        '(x(a)))
-  (["JUXT" "x" ["BRAK" "a"]] '(x[a]))
-  (["JUXT" "x" ["CURL" "a"]] '(x{a}))
-  (["JUXT" "x" (1 "a")]      '(x"a")))
+  (["#brak" "a" "b"]          '([a b]))
+  (["#juxt" "x" ["a"]]        '(x(a)))
+  (["#juxt" "x" ["#brak" "a"]] '(x[a]))
+  (["#juxt" "x" ["#curl" "a"]] '(x{a}))
+  (["#juxt" "x" (1 "a")]      '(x"a")))
 
 
 ;;; Destructuring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1048,13 +1048,13 @@ assert(Eq 3 ({f a b => b} 2 3))
 
 (tests
   ((1 "hi")              '("hi"))
-  (["JUXT" "x" (1 "hi")] '(x"hi")))
+  (["#juxt" "x" (1 "hi")] '(x"hi")))
 
 (defun (bindType arg)
   hed(Ix0 arg)
   (If (IsNat arg) 0
-    (If (Eq "BRAK" hed) 1
-      (If (Ne "JUXT" hed) Error("badarg.wut" arg)
+    (If (Eq "#brak" hed) 1
+      (If (Ne "#juxt" hed) Error("badarg.wut" arg)
         (If (Ne 3 (Sz arg)) Error("badarg.juxt" arg)
           2)))))
 
@@ -1082,12 +1082,12 @@ assert(Eq 3 ({f a b => b} 2 3))
 
 (defun (is-curl-let? x)
   (And (Eq 4 (Sz x))
-    (And (Eq "CURL" (Ix0 x))
+    (And (Eq "#curl" (Ix0 x))
       (Eq "=" (Ix2 x)))))
 
 (defun (is-juxt-let? let)
   (And (Eq 3 (Sz let))
-    (And (Eq "JUXT" (Ix0 let))
+    (And (Eq "#juxt" (Ix0 let))
       (IsNat (Ix1 let)))))
 
 (defun (parse-let let)
@@ -1109,7 +1109,7 @@ assert(Eq 3 ({f a b => b} 2 3))
 (defun (letExp bx)
   nm(Ix0 bx)
   bd(Ix1 bx)
-  ["JUXT" nm bd])
+  ["#juxt" nm bd])
 
 (defun (sum xs)      (foldl Add 0 xs))
 (defun (lsum xs)     (lfoldl Add 0 xs))
@@ -1148,7 +1148,7 @@ assert(Eq 3 ({f a b => b} 2 3))
 
 ; Redefine curly syntax to support destructuring
 
-(defmacro (CURL ws x)
+(defmacro (#curl ws x)
   (curly-syntax "patlaw" ws x))
 
 ; (defun (f x) bind body)
