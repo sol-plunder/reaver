@@ -1,6 +1,0 @@
-
-set -ex
-
-ghc -O2 -isrc/hs -outputdir .build -main-is Wisp src/hs/Wisp.hs -o Wisp
-
-./Wisp src/plan weave main

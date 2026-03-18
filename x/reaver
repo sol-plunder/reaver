@@ -1,3 +1,9 @@
+# If you have already started a Reaver session, this will resume from
+# snapshot.
+#
+# Otherwise, it will build reaver, load the standard library, exit,
+# and then *then* resume from the new snapshot created through this.
+
 set -ex
 
 hsbuild () {
