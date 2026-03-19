@@ -5,3 +5,4 @@ wisp/all.wisp
 .build
 .direnv
 *.swp
+src/plan/all.plan
