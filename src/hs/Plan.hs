@@ -289,8 +289,10 @@ rplan args = do
         ["Input", n]      -> N . bytesBar <$> BS.hGetSome stdin (toix $ nat n)
         ["Output", x]     -> output stdout x
         ["Warn", x]       -> output stderr x
-        ["ReadFile", N p] -> do contents <- BS.readFile (srcFile p)
-                                pure $ N $ bytesBar contents
+        ["ReadFile", N p] ->
+            try (BS.readFile (srcFile p)) <&> \case
+                Left  (_ :: IOException) -> N 0
+                Right contents           -> N (bytesBar contents)
         ["Print", N s]    -> do putStr (natStr s); pure (N 0)
         ["Stamp", N n]    ->
             try (getModificationTime (srcFile n)) <&> \case

@@ -233,9 +233,11 @@
       [cache uniq glo (K eValue)])
     (begin
       (print ("LOADING" module))
+      (define bytes (ReadFile filenm))
+      (And (Nil bytes) Error("#module" "file-not-found" filenm))
       (define @[cache value]
         (file-loop go module cache ctx INITIAL-UNIQUE EMPTY-ENVIRONMENT
-          (readAll 0 (explode-bytes (ReadFile filenm)))))
+          (readAll 0 (explode-bytes bytes))))
       (define cache (bst-insert module [stamp value] cache))
       [cache uniq glo (K value)])))
 
