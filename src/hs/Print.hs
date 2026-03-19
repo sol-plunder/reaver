@@ -263,7 +263,7 @@ assignGlobalNames reserved globals = namedResult <> unnamedResult
                (sortBy compare hashes)
 
     assignUnnamed (acc, used) h =
-        let base = "<" <> take 8 (renderHash h) <> ">"
+        let base = "<" <> take 8 (BS8.unpack (Base58.encodeBase58 Base58.bitcoinAlphabet h)) <> ">"
             n    = freshName base used
         in (Map.insert h n acc, Set.insert n used)
 
