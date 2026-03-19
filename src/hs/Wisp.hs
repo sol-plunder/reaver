@@ -314,9 +314,38 @@ compileExpr locals = \case
 
 unbound ctx x = error (ctx <> ": unbound: " <> x)
 
+-- Merge two envs into a balanced BST. New entries shadow old ones.
+-- Strategy: walk both trees to sorted lists, merge (new wins on clash),
+-- then build a balanced tree from the merged sorted array.
 mergeEnv :: Bst a -> Bst a -> Bst a
-mergeEnv old new = foldl step old (bstWalk new)
-  where step acc (Node k v m _ _) = putenv k v m acc
+mergeEnv old new = fromSortedList (mergeSorted (bstToList old) (bstToList new))
+  where
+    bstToList :: Bst a -> [(Natural, a, Bool)]
+    bstToList Empty            = []
+    bstToList (Node k v m l r) = bstToList l <> [(k, v, m)] <> bstToList r
+
+    -- Merge two sorted lists; on duplicate key, right (new) wins.
+    mergeSorted :: [(Natural, a, Bool)] -> [(Natural, a, Bool)] -> [(Natural, a, Bool)]
+    mergeSorted []         ys         = ys
+    mergeSorted xs         []         = xs
+    mergeSorted xs@(x:xs') ys@(y:ys') =
+        case compare (fst3 x) (fst3 y) of
+            LT -> x : mergeSorted xs' ys
+            EQ -> y : mergeSorted xs' ys'
+            GT -> y : mergeSorted xs  ys'
+      where fst3 (k, _, _) = k
+
+    -- Build a perfectly balanced BST from a sorted list in O(n).
+    fromSortedList :: [(Natural, a, Bool)] -> Bst a
+    fromSortedList xs = build (length xs) xs
+      where
+        build 0 _  = Empty
+        build n xs =
+            let mid      = n `div` 2
+                (ls, rs) = splitAt mid xs
+                (k,v,m)  = head rs
+            in Node k v m (build mid ls) (build (n - mid - 1) (tail rs))
+
 
 main :: IO ()
 main = do
