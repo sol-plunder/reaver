@@ -25,6 +25,7 @@
               ghcEnv
               pkgs.haskellPackages.ghcid
               pkgs.haskellPackages.stylish-haskell
+              pkgs.haskellPackages.cabal-install
             ];
           };
         });

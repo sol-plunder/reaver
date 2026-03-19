@@ -1,0 +1,43 @@
+cabal-version: 2.4
+name:          wisp
+version:       0.1.0.0
+license:       MIT
+license-file:  LICENSE
+
+executable wisp
+  main-is:          Main.hs
+  hs-source-dirs:   src/hs
+  default-language: Haskell2010
+  ghc-options:      -O2
+
+  default-extensions:
+      BangPatterns
+    , BlockArguments
+    , DeriveAnyClass
+    , DeriveFoldable
+    , DeriveFunctor
+    , DeriveGeneric
+    , DeriveTraversable
+    , LambdaCase
+    , MagicHash
+    , OverloadedStrings
+    , ViewPatterns
+    , ScopedTypeVariables
+
+  other-modules:
+      Types
+    , Print
+    , Plan
+    , Wisp
+
+  build-depends:
+      base
+    , vector
+    , bytestring
+    , base58-bytestring
+    , containers
+    , deepseq
+    , directory
+    , filepath
+    , time
+    , cryptohash-sha256

@@ -12,15 +12,15 @@ case "${1-}" in
 esac
 
 hsbuild () {
-	ghc -O2 -isrc/hs -outputdir .build -main-is Wisp src/hs/Wisp.hs -o Wisp
+	cabal build
 }
 
 reset () {
-	./Wisp src/plan reaver main
+	cabal run wisp -- src/plan reaver main
 }
 
 repl () {
-	./Wisp snap root _ # run from snapshot
+	cabal run wisp -- snap root _ # run from snapshot
 }
 
 load_stdlib () {

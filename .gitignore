@@ -6,3 +6,4 @@ wisp/all.wisp
 .direnv
 *.swp
 src/plan/all.plan
+dist-newstyle/
