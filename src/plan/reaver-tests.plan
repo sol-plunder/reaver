@@ -8,10 +8,10 @@
 
 ;; Test environment: a few globals
 ;; Inc=100, Add=101, foo=102, Seq=103
-(defval gInc (ginsert (Pin ["Inc" 100 0 (K 100) 0]) 0))
-(defval gAdd (ginsert (Pin ["Add" 101 0 (K 101) 0]) gInc))
-(defval gFoo (ginsert (Pin ["foo" 102 0 (K 102) 0]) gAdd))
-(defval gEnv (ginsert (Pin ["Seq" 103 0 0       0]) gFoo))
+(defval gInc (ginsert (Pin ["Inc" 100 "value" (K 100) 0]) 0))
+(defval gAdd (ginsert (Pin ["Add" 101 "value" (K 101) 0]) gInc))
+(defval gFoo (ginsert (Pin ["foo" 102 "value" (K 102) 0]) gAdd))
+(defval gEnv (ginsert (Pin ["Seq" 103 "value" 0       0]) gFoo))
 
 (defval incEntry (glookup "Inc" gEnv))
 (defval addEntry (glookup "Add" gEnv))

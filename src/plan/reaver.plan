@@ -396,7 +396,7 @@
   (go cache ctx uniq glo locals depth form))
 
 (define (gent-is-macro? pent)
-  (.entry-macro (Unpin pent)))
+  (Eq "macro" (.entry-macro (Unpin pent))))
 
 (define (reaver-apply go cache ctx uniq glo locals depth form[hd])
   (define lent[loc]  (bst-search hd locals))
@@ -446,23 +446,23 @@
   (define expr (loop glo names))
   names expr [cache uniq glo expr])
 
-(define (reaver-insert go cache ctx uniq glo locals depth is-macro nmS xS)
+(define (reaver-insert go cache ctx uniq glo locals depth type nmS xS)
   (define nm                  (read-identifier nmS))
   (define @[cache uniq glo x] (go cache ctx uniq glo locals depth xS))
   (define v                   (eval-expr x))
-  (define glo                 (ginsert (Pin [nm v is-macro x 0]) glo))
-  is-macro nm x v glo
+  (define glo                 (ginsert (Pin [nm v type x 0]) glo))
+  type nm x v glo
   [cache uniq glo (1 v)])
 
 (define (reaver-bind go cache ctx uniq glo locals depth form[_ nmS xS])
   (And depth           Error("#bind can only be used at the top-level"))
   (Or (Eq 3 (Sz form)) Error("#bind" "invalid" form))
-  (reaver-insert go cache ctx uniq glo locals depth 0 nmS xS))
+  (reaver-insert go cache ctx uniq glo locals depth "value" nmS xS))
 
 (define (reaver-macro go cache ctx uniq glo locals depth form[_ nmS xS])
   (And depth           Error("#macro can only be used at the top-level"))
   (Or (Eq 3 (Sz form)) Error("#macro" "invalid" form))
-  (reaver-insert go cache ctx uniq glo locals depth 1 nmS xS))
+  (reaver-insert go cache ctx uniq glo locals depth "macro" nmS xS))
 
 
 ;;; #letmacro ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
