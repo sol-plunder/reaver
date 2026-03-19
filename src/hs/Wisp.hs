@@ -36,7 +36,9 @@ bstWalk Empty = []
 bstWalk node@(Node _ _ _ l r) = bstWalk l <> (node : bstWalk r)
 
 bst Empty = N 0
-bst (Node k v m l r) = array [N k, v, planBit m, (N 0), bst l, bst r]
+bst (Node k v m l r) = adt k [macroBit m, v, bst l, bst r]
+  where macroBit True  = "macro"
+        macroBit False = "value"
 
 symE, strE :: String -> Val
 symE s   = N (strNat s)

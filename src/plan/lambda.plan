@@ -199,14 +199,14 @@
 ;;; chained LL nodes.  The difference from LL is that all bindings
 ;;; are in scope in all values, not just in later ones.
 
-(defval GlobalFlag 0)
-(defval MacroFlag 1)
-(defval LocalFlag 2)
+(defval ValueFlag "value")
+(defval MacroFlag "macro")
+(defval LocalFlag "local")
 
 ; data Entry = ENTRY     ;  Global Binding (BST Node)
 ;   { bind-key  :: Nat   ;    Name
 ;   , bind-val  :: Any   ;    Compiled value
-;   , bind-flag :: Flag  ;    GlobalFlag | MacroFlag | LocalFlag
+;   , bind-flag :: Flag  ;    ValueFlag | MacroFlag | LocalFlag
 ;   , bind-expr :: AST   ;    Source expression (retained for inlining)
 ;   }
 
