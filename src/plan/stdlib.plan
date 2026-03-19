@@ -968,109 +968,75 @@ assert(Eq 3 ({f a b => b} 2 3))
 
 ;;; Destructuring ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; BaseLawEnv = (Row Sym, Row (Sym, Exp))
-
-; BindAst = (Row Sym, Row (Sym, Exp))
-;   | NAM Str
-;   | TUP (Maybe Sym) (Row Bind)
+; BindAst = Sym | [Sym, Row BindAst]
+;   sym         -- plain name
+;   [nm flds]   -- alias with named fields: nm[f0 f1 ...]
+; All patterns must have a name. Nesting is supported.
 
 (defun (ixExp n x)
-  [ (1 (Case3 n Ix0 Ix1 (Ix n)))
-    x
-  ])
+  [(1 (Case3 n Ix0 Ix1 (Ix n))) x])
 
 (tests
   ((ixExp 0 "a") [(1 Ix0) "a"]))
 
-(defun (tupBind nm i bind)
-  [bind (ixExp i nm)])
-
-; tupBinds : Uniq -> List Bind -> List (Bind, Exp)
-(defun (tupBinds u binds)
-  (lmapi (tupBind u) binds))
-
-; destroyBind : Bind -> (Maybe Sym, List (Bind, Exp))
+(defun (destroyField nm i f)
+  (And (Ne f "_")
+    ~[[f (ixExp i nm)]]))
 
 (defun (destroyBind bind)
-  name(Ix0 bind)
-  elems(Ix1 bind)
-  (If (IsNat bind)
-    [bind NIL]
-    (Ifz name Error("pattern requires a name: use x[a b c] not [a b c]" bind)
-      [name (tupBinds name (stream elems))])))
-
-(tests
-  ( (destroyBind "hi"        ) ["hi"  ~[]                    ] )
-  ( (destroyBind ["a" []]    ) ["a"   ~[]                    ] )
-  ( (destroyBind ["a" ["x"]] ) ["a"   ~[["x" [(1 Ix0) "a"]]] ] )
-
-  ( (destroyBind ["a" ["x" "y" "z"]])
-    ["a" ~[["x" [(1 Ix0)    "a"] ]
-           ["y" [(1 Ix1)    "a"] ]
-           ["z" [(1 (Ix 2)) "a"] ]]] ))
-
-; destroyLets : List (Bind, Exp) -> List (Bind, Exp)
+  nm(Ix0 bind)
+  fields(Ix1 bind)
+  (If (IsNat bind) [bind NIL]
+    (Ifz nm Error("pattern requires a name: use x[a b c] not [a b c]" bind)
+      [nm (lcat (lmapi (destroyField nm) (stream fields)))])))
 
 (defun (destroyLets lets)
   l(Ix0 lets)
-  ls(Ix1 lets)
+  rest(Ix1 lets)
   bind(Ix0 l)
   expr(Ix1 l)
   temp(destroyBind bind)
-  name(Ix0 temp)
+  nm(Ix0 temp)
   more(Ix1 temp)
   (And lets
-    [[name expr] (destroyLets (lweld more ls))]))
+    [[nm expr] (destroyLets (lweld more rest))]))
 
-; destroyVars : List Bind -> -> (Uniq, List Sym, List (Bind, Exp))
+; destroy : List BindAst -> Row Sym -> List (Sym, Exp)
+;           -> (Row Sym, Row (Sym, Exp))
 
 (defun (destroy args nuvars lets)
   step(destroyBind (Ix0 args))
   (Ifz args
     [nuvars (array (destroyLets lets))]
-    (destroy
-      (Ix1 args)
-      (nuvars (Or (Ix0 step) "__unused"))
+    (destroy (Ix1 args)
+      (nuvars (Ix0 step))
       (lweld (Ix1 step) lets))))
 
 (tests
-  ((destroy ~["aa" ["bb" ["xx" "yy" ["tup" ["pp" "qq"]]]]] 0 0)
+  ((destroy ~["aa" ["bb" ["xx" "yy" "zz"]]] 0 0)
    [["aa" "bb"]
-    [[ "xx"  [ (1 Ix0)    "bb"  ]]
-     [ "yy"  [ (1 Ix1)    "bb"  ]]
-     [ "tup" [ (1 (Ix 2)) "bb"  ]]
-     [ "pp"  [ (1 Ix0)    "tup" ]]
-     [ "qq"  [ (1 Ix1)    "tup" ]]]]))
+    [["xx" [(1 Ix0)    "bb"]]
+     ["yy" [(1 Ix1)    "bb"]]
+     ["zz" [(1 (Ix 2)) "bb"]]]]])
 
 (tests
   ((1 "hi")              '("hi"))
   (["#juxt" "x" (1 "hi")] '(x"hi")))
 
-(defun (bindType arg)
-  hed(Ix0 arg)
-  (If (IsNat arg) 0
-    (If (Eq "#brak" hed) 1
-      (If (Ne "#juxt" hed) Error("badarg.wut" arg)
-        (If (Ne 3 (Sz arg)) Error("badarg.juxt" arg)
-          2)))))
-
-(tests
-  (0 (bindType '(x)))
-  (1 (bindType '([x y])))
-  (2 (bindType '(x[x y]))))
-
-(defun (bindParseVec parse-bind bind)
-  [0 (map parse-bind (drop 1 bind))])
-
-(defun (bindParseAlias parse-bind bind)
-  (Up 0 (Ix1 bind)
-    (parse-bind (Ix2 bind))))
+; parse-bind : Sexp -> BindAst
+;   sym         -> sym
+;   [a b c]     -> error (no name)
+;   x[a b c]    -> ["x" ["a" "b" "c"]]
+;   x[a b[c d]] -> ["x" ["a" ["b" ["c" "d"]]]]  (nested)
 
 (defun (parse-bind bind)
-  (Case3 (bindType bind)
-    bind                               ; symbol
-    (bindParseVec parse-bind bind)     ; [v e c]
-    (bindParseAlias parse-bind bind))) ; alias[v e c]
+  hed(Ix0 bind)
+  (If (IsNat bind) bind
+    (If (Eq "#brak" hed)
+      Error("pattern requires a name: use x[a b c] not [a b c]" bind)
+      (If (Ne "#juxt" hed) Error("parse-bind: bad pattern" bind)
+        (If (Ne 3 (Sz bind)) Error("parse-bind: bad juxt size" bind)
+          [(Ix1 bind) (map parse-bind (drop 1 (Ix2 bind)))])))))
 
 (tests
   ((parse-bind '(res))        "res"              )
@@ -1097,7 +1063,6 @@ assert(Eq 3 ({f a b => b} 2 3))
   ((is-curl-let? '( x(3)         )) 0)
   ((parse-let    '( x(3)         )) ["x"             (0 (1 3))])
   ((parse-let    '( {x      = 3} )) ["x"             (1 3)])
-  ((parse-let    '( {[x y]  = 3} )) [[0 ["x" "y"]]   (1 3)])
   ((parse-let    '( {a[x y] = 3} )) [["a" ["x" "y"]] (1 3)]))
 
 ; (lambda (self args..) (let) (let) body)
@@ -1137,10 +1102,10 @@ assert(Eq 3 ({f a b => b} 2 3))
   sigS(Ix2 x)
   self(Unself (Ix0 sigS))
   args(map parse-bind (drop 1 sigS))
-  lets(map parse-let (Init (drop 3 x)))
+  lets(stream (map parse-let (Init (drop 3 x))))
   body(Last x)
   (Trace x
-  (funExp tagS self body (destroy (stream args) 0 (stream lets)))))
+  (funExp tagS self body (destroy (stream args) 0 lets))))
 
 ; Redefine curly syntax to support destructuring
 
@@ -1247,7 +1212,7 @@ assert(Eq 3 ({f a b => b} 2 3))
     ~[[0 3] [1 4] [2 5]] ))
 
 (patfun (lcat-rows list-of-rows)
-  (lcat (lmap stream list-of-rows)))
+  (lcatmap stream list-of-rows))
 
 (tests ((lcat-rows ~[[3 4] 0 [5 6 7]])
         ~[3 4 5 6 7] ))
@@ -1256,7 +1221,7 @@ assert(Eq 3 ({f a b => b} 2 3))
 ;;; Character Classes ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (patfun (packClass strs)
-  (lfoldl (flip Set) 0 (lcat (lmap lexplode (stream strs)))))
+  (lfoldl (flip Set) 0 (lcatmap lexplode (stream strs))))
 
 (patfun (inClass charClass i)
   (Test i charClass))
