@@ -6,6 +6,11 @@
 
 set -ex
 
+case "${1-}" in
+  ''|--reset) ;;
+  *) echo "Unknown argument: $1" >&2; exit 1 ;;
+esac
+
 hsbuild () {
 	ghc -O2 -isrc/hs -outputdir .build -main-is Wisp src/hs/Wisp.hs -o Wisp
 }
