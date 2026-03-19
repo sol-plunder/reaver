@@ -48,9 +48,9 @@ natShowStr n = let s = natStr n in
         _   | all isOk s            -> Just s
             | otherwise             -> Nothing
   where
-    isOk ' '  = True
     isOk '\n' = True
-    isOk c    = isPrint c
+    isOk '"'  = False
+    isOk c    = isPrint c && ord c < 128
 
 natBytes :: Natural -> ByteString
 natBytes 0 = BS.empty
