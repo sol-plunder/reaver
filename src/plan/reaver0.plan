@@ -121,17 +121,17 @@
   (checkSize 2 forms
     (M (go ctx depth expr))))
 
-(patfun (readFun go env0 depth forms[_ pinS markS tagS sigS bodyS])
-  {argsS        = (drop 1 sigS)}
-  {selfS        = (.0 sigS)}
-  {pinned       = (parsePinnedFlag pinS)}
-  {inlined      = (parseInlineFlag markS)}
-  {tag          = (parseConst tagS)}
-  {self         = (parseName "#fun.self" selfS)}
-  {arity        = (Sz argsS)}
-  {[env1 selfD] = (bindGroup env0 depth [self])}
-  {[env2 bodyD] = (bindGroup env1 selfD (map (parseName "#fun.arg") argsS))}
-  {body         = (go env2 bodyD bodyS)}
+(patfun (readFun go e0 depth forms[_ pinS markS tagS sigS bodyS])
+  { argsS        = (drop 1 sigS)                                           }
+  { selfS        = (.0 sigS)                                               }
+  { pinned       = (parsePinnedFlag pinS)                                  }
+  { inlined      = (parseInlineFlag markS)                                 }
+  { tag          = (parseConst tagS)                                       }
+  { self         = (parseName "#fun.self" selfS)                           }
+  { arity        = (Sz argsS)                                              }
+  { @1[e1 selfD] = (bindGroup e0 depth [self])                             }
+  { @2[e2 bodyD] = (bindGroup e1 selfD (map (parseName "#fun.arg") argsS)) }
+  { body         = (go e2 bodyD bodyS)                                     }
   (checkSize 6 forms
     (F pinned inlined (has-ref arity body) tag arity body)))
 
@@ -175,10 +175,10 @@
   (go ctx (Add depth i) v))
 
 (patfun (readLet go ctx depth forms[_ bindsS bodyS])
-  {[nameSs valSs] = (readBinds bindsS)}
-  {vals           = (imap (letValStep depth ctx go) valSs)}
-  {[bodyCtx d2]   = (bindGroup ctx depth (map (parseName "#let") nameSs))}
-  {body           = (go bodyCtx d2 bodyS)}
+  { @1[nameSs valSs] = (readBinds bindsS)}
+  { vals             = (imap (letValStep depth ctx go) valSs)}
+  { @2[bodyCtx d2]   = (bindGroup ctx depth (map (parseName "#let") nameSs))}
+  { body             = (go bodyCtx d2 bodyS)}
   (checkSize 3 forms
     (foldr L body vals)))
 
@@ -187,10 +187,10 @@
 ;; away from the body, so it has the highest index, etc.
 
 (patfun (readLetrec go ctx depth forms[_ bindsS bodyS])
-  {[nameSs valSs] = (readBinds bindsS)}
-  {[bodyCtx d2] =   (bindGroup ctx depth (rev (map (parseName "#letrec") nameSs)))}
-  {vals = (map (go bodyCtx d2) valSs)}
-  {body = (go bodyCtx d2 bodyS)}
+  { @1[nameSs valSs] = (readBinds bindsS)}
+  { @2[bodyCtx d2] =   (bindGroup ctx depth (rev (map (parseName "#letrec") nameSs)))}
+  { vals = (map (go bodyCtx d2) valSs)}
+  { body = (go bodyCtx d2 bodyS)}
   (checkSize 3 forms
     (Ifz vals body
       (R vals body))))

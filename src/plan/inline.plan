@@ -243,7 +243,7 @@
     (res-pot=(pot-mark=(1) pot)
       res)))
 
-(patfun (inline-mark inline depth scope params [b])
+(patfun (inline-mark inline depth scope params @[b])
   (reapply inline depth scope params
     (res-set-mark (inline depth scope NIL b))))
 
@@ -259,9 +259,9 @@
 ;; the current depth, and how many arguments are needed.
 
 (patfun (inline-lambda inline depth scope params lam)
-  {[_ lmark lrecr _ largs lbody] = lam}
-  {s_ = (lweld (lrep NONE (Inc largs)) scope)}
-  {d_ = (Inc (Add largs depth))}
+  { @[_ lmark lrecr _ largs lbody] = lam       }
+  { s_ = (lweld (lrep NONE (Inc largs)) scope) }
+  { d_ = (Inc (Add largs depth))               }
   (reapply inline depth scope params
     (RES
       (lam-body=(.res-exp (inline d_ s_ NIL lbody)) lam)
@@ -270,7 +270,7 @@
 
 ;; =inline-letrec= runs the inlining pass on a letrec expression.
 
-(patfun (inline-letrec inline depth scope params x[vs b])
+(patfun (inline-letrec inline depth scope params @[vs b])
   nbinds(Sz vs)
   d_(Add depth nbinds)
   s_(lweld (lrep NONE nbinds) scope)
@@ -290,9 +290,9 @@
 ;; We never inline through let bindings, so the inline potential is
 ;; always uninhabited.
 
-(patfun (inline-let inline depth scope params x[v b])
-  {[vrs vre] =  (inline depth       scope             NIL    v)}
-  {[brs _bre] = (inline (Inc depth) (lcons vre scope) params b)}
+(patfun (inline-let inline depth scope params @[v b])
+  { @1[vrs vre]  = (inline depth       scope             NIL    v) }
+  { @2[brs _bre] = (inline (Inc depth) (lcons vre scope) params b) }
   (RES (L vrs brs) NONE))
 
 ;; =inline-apply= inlines an application expression.  This basically
@@ -305,7 +305,7 @@
 ;; Note that we run the inlining pass on the argument before
 ;; adding it to the list.
 
-(patfun (inline-apply inline depth scope params [func arg])
+(patfun (inline-apply inline depth scope params @[func arg])
   {RES[x _] = (inline depth scope NIL arg)}
   (inline depth scope (lcons (ARG depth x) params) func))
 

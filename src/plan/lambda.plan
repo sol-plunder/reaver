@@ -322,32 +322,32 @@
 
 ;; =ingest-mark= does nothing, we just ignore the mark.
 
-(patfun (ingest-mark ingest compile s env [x])
+(patfun (ingest-mark ingest compile s env @[x])
   (ingest compile s x env))
 
 ;; =ingest-local= just translates the reference into the new
 ;; representation (unique key per binding) by indexing into a stack.
 
-(patfun (ingest-local ingest compile s env [i])
+(patfun (ingest-local ingest compile s env @[i])
   [env (lix-error "ingest-local" i s)])
 
 ;; =ingest-global= just produces a constant.
 
-(patfun (ingest-global ingest compile s env [g])
+(patfun (ingest-global ingest compile s env @[g])
   [env (VAL (.bind-val (Unpin g)))])
 
 ;; =ingest-constant= just produces a constant.
 
-(patfun (ingest-constant ingest compile s env [x])
+(patfun (ingest-constant ingest compile s env @[x])
   [env (VAL x)])
 
 ;; =ingest-apply= ingests the function and the argument and then
 ;; either applies them right away (if it is a constant partial
 ;; application), or produces an application expression.
 
-(patfun (ingest-apply ingest compile s env0 [f_ x_])
-  {[env1 f] = (ingest compile s f_ env0)}
-  {[env2 x] = (ingest compile s x_ env1)}
+(patfun (ingest-apply ingest compile s env0 @[f_ x_])
+  {@1[env1 f] = (ingest compile s f_ env0)}
+  {@2[env2 x] = (ingest compile s x_ env1)}
   [env2 (folding-apply f x)])
 
 ; appending to arrays and resizing arrays
@@ -387,7 +387,7 @@
 ;; larger is almost certainly a string or packed structure that deserves
 ;; a name.
 
-(patfun (ingest-let ingest compile s env0 [v b])
+(patfun (ingest-let ingest compile s env0 @[v b])
   {iletout[env1 vr] = (ingest compile s v env0)}
   {nex1             = (Sz env1)}
   {is-app           = (Eq APP (Hd vr))}
@@ -400,11 +400,11 @@
 ;; This doesn't do any of the let optimizations, and it instead just
 ;; loads everything into the bindings table verbatim.
 
-(patfun (ingest-letrec-step ingest compile s env0 [vx k])
-  {[env1 vr] = (ingest compile s vx env0)}
+(patfun (ingest-letrec-step ingest compile s env0 @[vx k])
+  {@1[env1 vr] = (ingest compile s vx env0)}
   (Up k vr env1))
 
-(patfun (ingest-letrec ingest compile s env0 [vs b])
+(patfun (ingest-letrec ingest compile s env0 @[vs b])
   nBinds(Sz vs)
   nex0(Sz env0)
   ks(gen nBinds (Add nex0))
@@ -421,20 +421,20 @@
 ;; lambda lifting.
 
 (patfun (ingest-lambda ingest compile s env0 lam)
-  { selfkey  = (Sz env0)}
-  { argkey1  = (Inc selfkey)}
-  { argkeys  = (lgen (.lam-arity lam) (Add argkey1))}
-  { nex2     = (Add argkey1 (.lam-arity lam))}
-  {[bin bod] = (ingest compile
-                 (lweld (lrev (lmap VAR argkeys))
-                        (lcons (VAR selfkey) s))
-                 (.lam-body lam)
-                 (Rep 0 0 nex2))}
+  { selfkey     = (Sz env0)}
+  { argkey1     = (Inc selfkey)}
+  { argkeys     = (lgen (.lam-arity lam) (Add argkey1))}
+  { nex2        = (Add argkey1 (.lam-arity lam))}
+  { @1[bin bod] = (ingest compile
+                   (lweld (lrev (lmap VAR argkeys))
+                          (lcons (VAR selfkey) s))
+                   (.lam-body lam)
+                   (Rep 0 0 nex2))}
 
-  {nex3       = (Sz bin)}
-  {[cns free] = (compile
-                  (FUN (.lam-pinned lam) (.lam-name lam)
-                   selfkey argkeys bin bod))}
+  { nex3         = (Sz bin)}
+  { @2[cns free] = (compile
+                     (FUN (.lam-pinned lam) (.lam-name lam)
+                      selfkey argkeys bin bod))}
   [env0
    (lfoldl APP (Sap VAL cns) (lmap VAR free))])
 
@@ -474,11 +474,11 @@
 (patfun (expr-is-value? x)
   (Eq VAL (Hd x)))
 
-(patfun (make-dummy-function [bin bod])
+(patfun (make-dummy-function @[bin bod])
   nex(Sz bin)
   (FUN 0 "dummy" nex (lsing (Inc nex)) bin bod))
 
-(patfun (compile-dummy-function [bin bod])
+(patfun (compile-dummy-function @[bin bod])
   nex(Sz bin)
   (.0
     (compile

@@ -974,9 +974,6 @@ assert(Eq 3 ({f a b => b} 2 3))
 ;   | NAM Str
 ;   | TUP (Maybe Sym) (Row Bind)
 
-(defun (gensym i)
-  (strWeld "__" (showNat i)))
-
 (defun (ixExp n x)
   [ (1 (Case3 n Ix0 Ix1 (Ix n)))
     x
@@ -992,59 +989,58 @@ assert(Eq 3 ({f a b => b} 2 3))
 (defun (tupBinds u binds)
   (lmapi (tupBind u) binds))
 
-; destroyBind : Bind -> Uniq -> (Maybe Sym, List (Bind, Exp))
+; destroyBind : Bind -> (Maybe Sym, List (Bind, Exp))
 
-(defun (destroyBind bind u)
-  name(Or (Ix0 bind) (gensym u))
+(defun (destroyBind bind)
+  name(Ix0 bind)
   elems(Ix1 bind)
   (If (IsNat bind)
     [bind NIL]
-    [name (tupBinds name (stream elems))]))
+    (Ifz name Error("pattern requires a name: use x[a b c] not [a b c]" bind)
+      [name (tupBinds name (stream elems))])))
 
 (tests
-  ( (destroyBind "hi"         5) ["hi"  ~[]                    ] )
-  ( (destroyBind ["a" []]     5) ["a"   ~[]                    ] )
-  ( (destroyBind [0 []]       5) ["__5" ~[]                    ] )
-  ( (destroyBind ["a" ["x"]]  5) ["a"   ~[["x" [(1 Ix0) "a"]]] ] )
+  ( (destroyBind "hi"        ) ["hi"  ~[]                    ] )
+  ( (destroyBind ["a" []]    ) ["a"   ~[]                    ] )
+  ( (destroyBind ["a" ["x"]] ) ["a"   ~[["x" [(1 Ix0) "a"]]] ] )
 
-  ( (destroyBind ["a" ["x" "y" "z"]] 5)
+  ( (destroyBind ["a" ["x" "y" "z"]])
     ["a" ~[["x" [(1 Ix0)    "a"] ]
            ["y" [(1 Ix1)    "a"] ]
            ["z" [(1 (Ix 2)) "a"] ]]] ))
 
-; destroyLets : List (Bind, Exp) -> Uniq -> List (Bind, Exp)
+; destroyLets : List (Bind, Exp) -> List (Bind, Exp)
 
-(defun (destroyLets lets i)
+(defun (destroyLets lets)
   l(Ix0 lets)
   ls(Ix1 lets)
   bind(Ix0 l)
   expr(Ix1 l)
-  temp(destroyBind bind i)
+  temp(destroyBind bind)
   name(Ix0 temp)
   more(Ix1 temp)
   (And lets
-    [[name expr] (destroyLets (lweld more ls) (Inc i))]))
+    [[name expr] (destroyLets (lweld more ls))]))
 
 ; destroyVars : List Bind -> -> (Uniq, List Sym, List (Bind, Exp))
 
-(defun (destroy args nuvars lets i)
-  step(destroyBind (Ix0 args) i)
+(defun (destroy args nuvars lets)
+  step(destroyBind (Ix0 args))
   (Ifz args
-    [nuvars (array (destroyLets lets i))]
+    [nuvars (array (destroyLets lets))]
     (destroy
       (Ix1 args)
       (nuvars (Or (Ix0 step) "__unused"))
-      (lweld (Ix1 step) lets)
-      (Inc i))))
+      (lweld (Ix1 step) lets))))
 
 (tests
-  ((destroy ~["aa" ["bb" ["xx" "yy" [0 ["pp" "qq"]]]]] 0 0 0)
+  ((destroy ~["aa" ["bb" ["xx" "yy" ["tup" ["pp" "qq"]]]]] 0 0)
    [["aa" "bb"]
     [[ "xx"  [ (1 Ix0)    "bb"  ]]
      [ "yy"  [ (1 Ix1)    "bb"  ]]
-     [ "__4" [ (1 (Ix 2)) "bb"  ]]
-     [ "pp"  [ (1 Ix0)    "__4" ]]
-     [ "qq"  [ (1 Ix1)    "__4" ]]]]))
+     [ "tup" [ (1 (Ix 2)) "bb"  ]]
+     [ "pp"  [ (1 Ix0)    "tup" ]]
+     [ "qq"  [ (1 Ix1)    "tup" ]]]]))
 
 (tests
   ((1 "hi")              '("hi"))
@@ -1144,7 +1140,7 @@ assert(Eq 3 ({f a b => b} 2 3))
   lets(map parse-let (Init (drop 3 x)))
   body(Last x)
   (Trace x
-  (funExp tagS self body (destroy (stream args) 0 (stream lets) 0))))
+  (funExp tagS self body (destroy (stream args) 0 (stream lets)))))
 
 ; Redefine curly syntax to support destructuring
 
@@ -1192,7 +1188,7 @@ assert(Eq 3 ({f a b => b} 2 3))
 (patmacro (defun _ _)
   Error("use patfun instead"))
 
-(patfun (uncurry fun [a1 a2])
+(patfun (uncurry fun @[a1 a2])
   {res[pp qq] = (fun a1 a2)}
   res)
 
@@ -1409,7 +1405,7 @@ assert(Eq 3 ({f a b => b} 2 3))
   (lgen n (const i)))
 
 (patfun (tstep f old[s0 acc] x0)
-  {[s1 x1] = (f s0 x0)}
+  {@[s1 x1] = (f s0 x0)}
   [s1 (acc x1)])
 
 (patfun (traverse st f row)
