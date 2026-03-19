@@ -402,7 +402,7 @@ savePin pin@(P hash subPins _) = do
     savePinOnly pin
     let b58 = BS8.unpack (Base58.encodeBase58 Base58.bitcoinAlphabet hash)
     createDirectoryIfMissing False "./snap/"
-    writeFile "snap/root.plan" ("@" <> b58 <> "\n")
+    appendFile "snap/root.plan" ("@" <> b58 <> "\n")
     pure (N 0)
 savePin x = error ("Save: expected a pin, got: " <> showVal x)
 
