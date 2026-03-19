@@ -248,7 +248,7 @@
 ; be present, so the function is not passed a maybe.
 
 (define (bst-alter-known f key x[xkey xval l r])
-  (define xsz (Hd x))
+  (define xsz (Hd x)) ; TODO: support x(xsz xkey xval l r) patterns
   (Ifz x E
       (Case3 (Cmp key xkey)
         (balance xkey xval (bst-alter-known f key l) r)

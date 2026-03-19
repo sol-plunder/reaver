@@ -50,13 +50,12 @@
     (If (Eq s "inline") 1
        Error("bad-inline-flag" s))))
 
-(patfun (parseConst s[n])
-  (If (Eq 1 (Hd s)) n
+(patfun (parseConst s(k n))
+  (If (Eq 1 k) n
     Error("bad-nat" s)))
 
-(patfun (parseNat s[n])
-  (If (And (Eq 1 (Hd s))
-        (IsNat n))
+(patfun (parseNat s(k n))
+  (If (And (Eq 1 k) (IsNat n))
     n
     Error("bad-nat" s)))
 
@@ -153,8 +152,7 @@
     (readFun "go" 0 5 '((#fun nopin inline "const" (const x y) x))) )
 )
 
-(patfun (hasShape hd sz x)
-  h(Hd x)
+(patfun (hasShape hd sz x(h))
   (And (IsNat h)
    (And (Eq hd h)
      (Eq sz (Sz x)))))
@@ -163,8 +161,8 @@
   (If (hasShape 0 2 bind) bind
     Error("bad-bind" bind)))
 
-(patfun (sexp-is-expr s)
-  (Nil (Hd s)))
+(patfun (sexp-is-expr s(k))
+  (Nil k))
 
 (patfun (readBinds binds)
   (Ifz (sexp-is-expr binds)
@@ -259,15 +257,14 @@
       (V (Sub depth (.bind-val ent)))
       (G (Pin (clean-entry ent))))))
 
-(patfun (readExpr env depth form[a])
+(patfun (readExpr env depth form(k a))
   appCase(readApp readExpr env depth form)
   valCase(K a)
   symCase(readSym env depth form)
   (Ifz form appCase
     (If (IsNat form) symCase
-      (If (Nil (Hd form)) appCase
-        (If (Eq 1 (Hd form)) valCase
-          Error("reaver0-bad-sexp" form))))))
+      (Case3 k appCase valCase
+        Error("reaver0-bad-sexp" form)))))
 
 (patfun (reaver0 env form)
   (readExpr env 0 form))

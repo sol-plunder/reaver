@@ -276,8 +276,8 @@
 ;; leave it as an APP node in the Code IR.  This optimization results
 ;; in slightly smaller laws.
 
-(patfun (is-constant-app f x)
-  (And (And (Eq VAL (Hd f)) (Eq VAL (Hd x)))
+(patfun (is-constant-app f(hf) x(hx))
+  (And (And (Eq VAL hf) (Eq VAL hx))
     (Ne 1 (planArity (.0 f)))))
 
 (patfun (folding-apply f[fv] x[xv])
@@ -388,11 +388,11 @@
 ;; a name.
 
 (patfun (ingest-let ingest compile s env0 @[v b])
-  {iletout[env1 vr] = (ingest compile s v env0)}
-  {nex1             = (Sz env1)}
-  {is-app           = (Eq APP (Hd vr))}
-  {s2               = (lcons (If is-app (VAR nex1) vr) s)}
-  {env2             = (If is-app (snoc env1 vr) env1)}
+  {iletout[env1 vr(vrk)] = (ingest compile s v env0)}
+  {nex1                  = (Sz env1)}
+  {is-app                = (Eq APP vrk)}
+  {s2                    = (lcons (If is-app (VAR nex1) vr) s)}
+  {env2                  = (If is-app (snoc env1 vr) env1)}
   (ingest compile s2 b env2))
 
 ;; =ingest-letrec= ingests a recursive let binding.
@@ -471,8 +471,8 @@
 
 ;; compile-expr : AST -> Any
 
-(patfun (expr-is-value? x)
-  (Eq VAL (Hd x)))
+(patfun (expr-is-value? x(xk))
+  (Eq VAL xk))
 
 (patfun (make-dummy-function @[bin bod])
   nex(Sz bin)

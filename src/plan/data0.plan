@@ -15,10 +15,10 @@
 ;;; provide macros for switching on tags, you still have to pull out
 ;;; the fields by hand.
 
-(patfun (get-cnstr-tag e nm)
+(patfun (get-cnstr-tag e nm(key tag))
   {r[_ val] = (getenv nm e)}
-  (If (And (Eq (Sz nm) 1) (Eq (Hd nm 1)))
-    (.0 nm)
+  (If (And (Eq (Sz nm) 1) (Eq 1 key))
+    tag
     (Ifz r Error("unbound-constructor" nm)
       val)))
 
@@ -52,10 +52,10 @@
     (array
       (envvals (pairsenv (stream branches))))))
 
-(patfun (valid-switch-branch-shape branch)
+(patfun (valid-switch-branch-shape branch(key code))
   (And (Eq 2 (Sz branch))
-    (And (Nil (Hd branch))
-      (IsNat (.0 branch)))))
+    (And (Nil key)
+      (IsNat code))))
 
 (patfun (verify-switch-branch-shape branch k)
   (Ifz (valid-switch-branch-shape branch)

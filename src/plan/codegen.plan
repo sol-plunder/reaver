@@ -86,18 +86,18 @@
   (Seq count
     (Up k count st)))
 
-(patfun (is-unseen-ref-to-let ref fun st)
-  (And (Nil (Test ref (Hd st)))
+(patfun (is-unseen-ref-to-let ref fun st(seen))
+  (And (Nil (Test ref seen))
     (is-ref-let-bound? fun ref)))
 
-(patfun (countloop fun st sx[a b])
+(patfun (countloop fun st(seen) sx[a b])
   (union-switch sx
     (VAL st)
     (APP (countloop fun (countloop fun st a) b))
     (VAR (bump a
            (Ifz (is-unseen-ref-to-let a fun st) st
              (countloop fun
-               (Coup (Set a (Hd st)) st)
+               (Coup (Set a seen) st)
                (Ix a (.fun-binds fun))))))))
 
 (patfun (refcount fun)
@@ -166,8 +166,7 @@
 ;;
 ;; When =isCode= returns true, the value must be quoted as (0 v).
 
-(patfun (app-is-code? outer x)
-  hx(Hd x)
+(patfun (app-is-code? outer x(hx))
   (Case3 (Dec (Sz x))
     (Nil hx)                            ; 0[a]   -> 1
     (Or (Nil hx) (And outer (Eq 1 hx))) ; 0[a b] -> 1

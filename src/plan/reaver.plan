@@ -144,14 +144,14 @@
 ;-- Read Helpers
 ;-- ============================================================================
 
-(define (parse-flag s[n])
+(define (parse-flag s[n]) ; TODO: support s(k n) patterns
   (If (And (Eq 1 (Hd s))
         (And (IsNat n)
           (Le n 1)))
     n
     Error("bad-flag" s)))
 
-(define (parse-nat s[n])
+(define (parse-nat s[n]) ; TODO: support s(k n) patterns
   (If (And (Eq 1 (Hd s))
         (IsNat n))
     n
@@ -342,7 +342,7 @@
   [cache uniq glo (F pinned inlined (has-ref arity body) tag arity body)])
 
 (define (has-shape hd sz x)
-  (define h (Hd x))
+  (define h (Hd x)) ; TODO: support x(h) patterns
   (And (IsNat h)
    (And (Eq hd h)
      (Eq sz (Sz x)))))

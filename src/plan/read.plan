@@ -415,7 +415,7 @@
 ; scan-stop : List Token -> TT -> Nat -> List Token -> Nat -> Nat
 ; Returns token count to stop at, or 0 to continue.
 (define (scan-stop ts[tok rest] d acc)
-  (define tt (Hd tok))
+  (define tt (Hd tok)) ; TODO: support ts(tt tok rest) patterns
   (cond
     ((Nil ts)          acc)
     ((Gt d 1)          0)
