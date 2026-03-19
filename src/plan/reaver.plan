@@ -563,10 +563,16 @@
     (Save (Pin (repl-main cache uniq glo)))
     (And results
       (begin
-        (define _r[cache uniq glo val]
-          (reval cache ("stdin" l c form) uniq glo form))
-        (print val)
-        (repl cache uniq glo rest))))
+        (define result[rval]
+          (Try (reval cache ("stdin" l c form) uniq glo) form))
+        (cond
+          ((Hd result)
+            (print ("ERROR" rval))
+            (repl cache uniq glo rest))
+          (else
+            (define @[cache uniq glo val] rval)
+            (print val)
+            (repl cache uniq glo rest))))))
 
   (define res[cache uniq glo]
     (Ifz args [cache uniq glo] (Try (main-file cache uniq glo) filename)))
