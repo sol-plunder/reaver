@@ -4,12 +4,12 @@
 
 @inline
 
-;;;; Riv is a simpler variant of Reaver which is implemented within
-;;;; the Wisp macro system.  Reaver itself is implemented in Riv.
+;;;; Reaver0 is a simpler variant of Reaver which is implemented within
+;;;; the Wisp macro system.  Reaver itself is implemented in Reaver0.
 ;;;;
-;;;; Riv supports all of the lambda-calculus features, but it uses
+;;;; Reaver0 supports all of the lambda-calculus features, but it uses
 ;;;; the Wisp syntax and macro-system, which is stateless and does not
-;;;; support hygenic macros
+;;;; support hygenic macros.
 ;;;;
 ;;;; This gives us just enough expressive power in order to build Reaver
 ;;;; out without too much pain.
@@ -267,22 +267,22 @@
     (If (IsNat form) symCase
       (If (Nil (Hd form)) appCase
         (If (Eq 1 (Hd form)) valCase
-          Error("riv-bad-sexp" form))))))
+          Error("reaver0-bad-sexp" form))))))
 
-(patfun (riv env form)
+(patfun (reaver0 env form)
   (readExpr env 0 form))
 
 
-;;; Bind Riv Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;; Bind Reaver0 Macros ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(patfun (rivr env form)
-  x(riv env form)
+(patfun (reaver0-macro env form)
+  x(reaver0 env form)
   (1 (eval-expr x)))
 
-(#macro #fun    rivr)
-(#macro #let    rivr)
-(#macro #letrec rivr)
-(#macro #inline rivr)
+(#macro #fun    reaver0-macro)
+(#macro #let    reaver0-macro)
+(#macro #letrec reaver0-macro)
+(#macro #inline reaver0-macro)
 
 
 ;;; #define ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -290,7 +290,7 @@
 ; #define is a convenience wrapper over #bind.
 
 (patmacro (#define env form[_ macro-flag nm expS])
-  expr(riv env expS)
+  expr(reaver0 env expS)
   width(Sz form)
   value(eval-expr expr)
   (Ifz (Eq width 4)
@@ -670,4 +670,4 @@ assert(Eq 7 (and 5 6 7))
 
 ;;; Done! ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(print "all riv-boot tests passed")
+(print "all reaver0 tests passed")
