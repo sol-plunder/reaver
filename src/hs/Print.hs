@@ -575,9 +575,12 @@ canonize _pins v = intercalate "\n" (importLines <> [bindLine, exportLine])
     importLines :: [String]
     importLines = concatMap importFor globals
       where
+        maxLen = maximum (map (length . hashToB58 . grHash) globals)
         importFor g =
-            let name = Map.findWithDefault (hashToB58 (grHash g)) (grHash g) nameTable
-            in ["@" <> hashToB58 (grHash g) <> " (#bind " <> name <> " _)"]
+            let b58  = hashToB58 (grHash g)
+                pad  = replicate (maxLen - length b58) ' '
+                name = Map.findWithDefault b58 (grHash g) nameTable
+            in ["@" <> b58 <> pad <> " (#bind " <> name <> " _)"]
 
     bindDoc    = DApp (DRef "#bind")
                       [ DRef "_"
