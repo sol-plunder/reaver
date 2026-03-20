@@ -207,8 +207,12 @@
       (define ctx (mod l c x))
       (define locals 0)
       (define depth 0)
-      (define @[cache uniq glo val] (go cache ctx uniq glo locals depth x))
+      (define @[cache uniq glo expr] (go cache ctx uniq glo locals depth x))
+      (define val (eval-expr expr))
+      (print "<MODULE-INPUT>")
+      (print expr)
       (print val)
+      (print "</MODULE-INPUT>")
       (file-loop go mod cache ctx uniq glo more))))
 
 (define EMPTY-ENVIRONMENT 0)
@@ -530,8 +534,10 @@
   (reaver-form cache ctx uniq glo 0 0 form))
 
 (define (reval cache ctx uniq glo form)
-  (define @[cache uniq glo x] (reaver cache ctx uniq glo form))
-  [cache uniq glo (eval-expr x) x])
+  (define @[cache uniq glo expr] (reaver cache ctx uniq glo form))
+  (define val (eval-expr expr))
+  (Seq val
+    [cache uniq glo val expr]))
 
 
 ;;; Main ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -541,18 +547,6 @@
   (And (not (bytes-is-empty? bytes))
     (lweld (explode-bytes bytes)
       (read-stdin block-size))))
-
-(define (file-loop fil cache uniq glo forms[@[l c form] more])
-  glo
-  (Ifz forms [cache uniq glo]
-    (begin
-      (define @[cache uniq glo val]
-        (reval cache (fil l c form) uniq glo form))
-      (file-loop fil cache uniq glo more))))
-
-(define (main-file cache uniq glo filename)
-  (file-loop filename cache uniq glo
-    (readAll 0 (explode-bytes (ReadFile filename)))))
 
 (define (repl-main cache uniq glo args[filename])
   (define (repl cache uniq glo results[@[l c form] rest])
@@ -566,15 +560,12 @@
             (print ("ERROR" rval))
             (repl cache uniq glo rest))
           (else
-            (define @[cache uniq glo val] rval)
+            (define @[cache uniq glo val expr] rval)
+            (print "<INPUT>")
+            (print expr)
             (print val)
+            (print "</INPUT>")
             (repl cache uniq glo rest))))))
-
-  (define res[cache uniq glo]
-    (Ifz args [cache uniq glo] (Try (main-file cache uniq glo) filename)))
-
-  (If (Hd res) (print ("ERROR" res))
-    (putStrLn "FILE OKAY"))
 
   (repl cache uniq glo (readAll 1 (read-stdin 65536))))
 
