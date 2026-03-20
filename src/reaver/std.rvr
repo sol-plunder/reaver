@@ -740,3 +740,34 @@ assert(Eq 1 (or 1 2 3))
   (2 quote x))
 
 (quoted (a b [c]))
+
+
+;;; Strings ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (strWeld a b)
+  (Add (Lsh b (Lsh (Bytes a) 3)) a))
+
+assert(Equal "asdf" (strWeld "" "asdf"))
+assert(Equal "asdf" (strWeld "a" "sdf"))
+assert(Equal "asdf" (strWeld "as" "df"))
+assert(Equal "asdf" (strWeld "asd" "f"))
+assert(Equal "asdf" (strWeld "asdf" ""))
+
+(define (lstrcat xs)
+  (lfoldl strWeld 0 xs))
+
+assert(Equal "abcdef" (lstrcat ~["ab" "cd" "ef"]))
+
+(define (decimal n)
+  (And n
+    [(Mod n 10) (decimal (Div n 10))]))
+
+(define (showNat n)
+  (Ifz n "0"
+    (lstrcat (lrev (lmap (Add "0") (decimal n))))))
+
+assert(Equal "abcdefg" (lstrcat ~["a" "bc" "d" "" "efg"]))
+
+assert(Equal "0"   (showNat 0))
+assert(Equal "1"   (showNat 1))
+assert(Equal "100" (showNat 100))
