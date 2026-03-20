@@ -209,10 +209,7 @@
       (define depth 0)
       (define @[cache uniq glo expr] (go cache ctx uniq glo locals depth x))
       (define val (eval-expr expr))
-      (print "<MODULE-INPUT>")
-      (print expr)
       (print val)
-      (print "</MODULE-INPUT>")
       (file-loop go mod cache ctx uniq glo more))))
 
 (define EMPTY-ENVIRONMENT 0)
@@ -561,10 +558,7 @@
             (repl cache uniq glo rest))
           (else
             (define @[cache uniq glo val expr] rval)
-            (print "<INPUT>")
-            (print expr)
             (print val)
-            (print "</INPUT>")
             (repl cache uniq glo rest))))))
 
   (repl cache uniq glo (readAll 1 (read-stdin 65536))))
