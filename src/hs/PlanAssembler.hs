@@ -4,6 +4,7 @@
 
 {-# LANGUAGE LambdaCase, ViewPatterns, BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ImplicitParams #-}
 
 module PlanAssembler where
 
@@ -28,28 +29,16 @@ import Types
 import Print
 import Plan
 
-data Bst a = Empty | Node Natural a Bool (Bst a) (Bst a)
-
-type Env = Bst Val
-
-bstWalk Empty = []
-bstWalk node@(Node _ _ _ l r) = bstWalk l <> (node : bstWalk r)
-
-bst Empty = N 0
-bst (Node k v m l r) = adt k [macroBit m, v, bst l, bst r]
-  where macroBit True  = "macro"
-        macroBit False = "value"
+natE :: Natural -> Val
+natE n   = A (N 1) $ V.singleton $ N n
 
 symE, strE :: String -> Val
 symE s   = N (strNat s)
-strE s   = N 1 % N (strNat s)
+strE s   = natE (strNat s)
 
 valHd :: Val -> Val
 valHd (A f _) = valHd f
 valHd x       = x
-
-natE :: Natural -> Val
-natE n   = N 1 % N n
 
 listE :: [Val] -> Val
 listE xs = array xs
@@ -124,14 +113,15 @@ parseMany s = case eat s of
     [] -> []
     xs -> n : parseMany rest where (n, rest) = parse xs
 
-vEnv :: IORef Env
-vEnv = unsafePerformIO (newIORef Empty)
+bstWalk :: Bst a -> [Bst a]
+bstWalk Empty = []
+bstWalk node@(Node _ _ _ l r) = bstWalk l <> (node : bstWalk r)
 
-vMod :: IORef (Bst Env)
-vMod = unsafePerformIO (newIORef Empty)
-
-getenvIO :: Natural -> IO (Maybe (Bool, Val, Env))
-getenvIO key = getenv key <$> readIORef vEnv
+bst :: Bst Val -> Val
+bst Empty = N 0
+bst (Node k v m l r) = adt k [macroBit m, v, bst l, bst r]
+  where macroBit True  = "macro"
+        macroBit False = "value"
 
 getenv :: Natural -> Bst a -> Maybe (Bool, a, Bst a)
 getenv _   Empty = Nothing
@@ -140,9 +130,6 @@ getenv key node@(Node k v m l r) = case compare key k of
   EQ -> Just (m, v, node)
   GT -> getenv key r
 
-putEnvIO :: Natural -> Val -> Bool -> IO ()
-putEnvIO key val mac = modifyIORef' vEnv (putenv key val mac)
-
 putenv :: Natural -> a -> Bool -> Bst a -> Bst a
 putenv key val mac Empty = Node key val mac Empty Empty
 putenv key val mac (Node k v m l r) = case compare key k of
@@ -150,10 +137,16 @@ putenv key val mac (Node k v m l r) = case compare key k of
           EQ -> Node k val mac l r
           GT -> Node k v m l (putenv key val mac r)
 
-eval :: Val -> IO Val
+getenvIO :: InActor => Natural -> IO (Maybe (Bool, Val, Env))
+getenvIO key = getenv key <$> readIORef (rtsEnv ?actorSt)
+
+putEnvIO :: InActor => Natural -> Val -> Bool -> IO ()
+putEnvIO key val mac = modifyIORef' (rtsEnv ?actorSt) (putenv key val mac)
+
+eval :: InActor => Val -> IO Val
 eval top = macroexpand [] top >>= thunk >>= evaluate
 
-thunk :: Val -> IO Val
+thunk :: InActor => Val -> IO Val
 thunk top = case unapp top of
     [N 0]    -> pure (N 0)
     [N 1, x] -> pure x
@@ -164,7 +157,7 @@ thunk top = case unapp top of
 
 data Macro = PIN | LAW | APP | BIND | MACRO | EXPORT | USER Val
 
-expand1 :: Macro -> Val -> IO Val
+expand1 :: InActor => Macro -> Val -> IO Val
 expand1 mac x = do
   case (mac, listElems "expand1" x) of
     (PIN, [_, v]) ->
@@ -195,13 +188,13 @@ expand1 mac x = do
     (EXPORT, _:syms) -> do
         keys <- traverse (getNat "export") syms
         vals <- traverse getenvIO keys
-        writeIORef vEnv Empty
+        writeIORef (rtsEnv ?actorSt) Empty
         flip traverse vals \(Just (_, _, Node k v m _ _)) ->
             putEnvIO k v m
         pure (N 0)
 
     (USER macVal, _) -> do
-        env <- readIORef vEnv
+        env <- readIORef (rtsEnv ?actorSt)
         pure $! (macVal % bst env % x)
 
     _ -> error ("bad-form" <> showVal x)
@@ -214,7 +207,7 @@ getNat :: String -> Val -> IO Natural
 getNat _   (N n) = pure n
 getNat why val   = error ("bad-" <> why <> ": " <> showVal val)
 
-macroexpand :: Locals -> Val -> IO Val
+macroexpand :: InActor => Locals -> Val -> IO Val
 macroexpand loc = go
   where
     go v = case unapp v of
@@ -231,7 +224,7 @@ macroexpand loc = go
     getmacro = \case N s : _ -> sym s; _ -> pure Nothing
 
     sym s = do
-        env <- readIORef vEnv
+        env <- readIORef (rtsEnv ?actorSt)
         pure $ case (lookup s loc, getenv s env) of
             (Just{}, _)                 -> Nothing
             (_, Just (True, v, _))      -> Just (USER v)
@@ -246,7 +239,7 @@ macroexpand loc = go
 
 type Locals = [(Natural, Natural)] -- (sym -> refIndex)
 
-lawExp :: Val -> Val -> [Val] -> IO Val
+lawExp :: InActor => Val -> Val -> [Val] -> IO Val
 lawExp tagForm sigForm forms = do
     let (bodySrc, bindForms) = case reverse forms of
             body : revBinds -> (body, reverse revBinds)
@@ -292,7 +285,7 @@ listElems ctx v = case unapp v of
 lawQuote :: Val -> Val
 lawQuote x = array [x]
 
-compileExpr :: Locals -> Val -> IO Val
+compileExpr :: InActor => Locals -> Val -> IO Val
 compileExpr locals = \case
     N 0       -> pure $ lawQuote (N 0) -- (0 0)
     A (N 1) x -> pure $ lawQuote (x!0) -- (0 x)
@@ -348,42 +341,43 @@ mergeEnv old new = fromSortedList (mergeSorted (bstToList old) (bstToList new))
 
 
 main :: IO ()
-main = do
-    hSetBuffering stdin LineBuffering -- NoBuffering
+main = withNewRts do
+    hSetBuffering stdin LineBuffering
     getArgs >>= void . \case
         d:m:s:as -> loadAssembly d m (Just s) >>= runRepl as
         [d,m]    -> loadAssembly d m Nothing
-        _        -> error "usage: plan-assembler srcdir module [function]"
+        _        -> error "usage: wisp module function as ..."
 
-preserveState :: IO Val -> IO Val
+preserveState :: InActor => IO Val -> IO Val
 preserveState act = do
     oldMode <- readIORef vMode
-    oldEnv  <- readIORef vEnv
+    oldEnv  <- readIORef (rtsEnv ?actorSt)
     res <- act
     writeIORef vMode oldMode
-    writeIORef vEnv  oldEnv
+    writeIORef (rtsEnv ?actorSt) oldEnv
     pure res
 
 -- Execute a RPLAN procedure.
-runRepl :: [String] -> Val -> IO Val
+runRepl :: InActor => [String] -> Val -> IO Val
 runRepl args = \case
     v@(P _ _ L{}) -> runReplFn args v
     v@(P _ _ x)   -> runRepl args x -- unpin pinned app
     v             -> runReplFn args v -- unpin pinned app
   where
-    runReplFn args fun = preserveState do
-        writeIORef vEnv  Empty -- This shouldn't actually matter.
-        writeIORef vMode RPLAN -- enable REPL effects
-        evaluate $ force $ (fun %) $ array $ map (N . strNat) $ args
+    runReplFn args fun = do
+        preserveState do
+           writeIORef (rtsEnv ?actorSt) Empty
+           writeIORef vMode RPLAN
+           evaluate $ force $ (fun %) $ array $ map (N . strNat) $ args
 
 logStart _mod = pure () -- putStrLn ("<LOAD " <> _mod <> ">")
 logCached _mod = pure () -- putStrLn ("cached:" <> _mod)
 logFinish _mod = pure () -- putStrLn ("</LOAD " <> _mod <> ">")
 
-loadAssembly :: FilePath -> String -> Maybe String -> IO Val
+loadAssembly :: InActor => FilePath -> String -> Maybe String -> IO Val
 loadAssembly srcDir mod mFn = preserveState do
     writeIORef vMode (if srcDir == "snap" then RPLAN else BPLAN)
-    writeIORef vEnv Empty
+    writeIORef (rtsEnv ?actorSt) Empty
     processFile mod
     case mFn of
         Nothing -> pure (N 0)
@@ -393,32 +387,31 @@ loadAssembly srcDir mod mFn = preserveState do
   where
     processFile mod = do
         let modn = strNat mod
-        oldenv <- readIORef vEnv
+        oldenv <- readIORef (rtsEnv ?actorSt)
         modenv <- loadModule mod
-        modifyIORef vMod $ putenv modn modenv False
-        writeIORef vEnv $! mergeEnv oldenv modenv
+        modifyIORef (rtsMod ?actorSt) $ putenv modn modenv False
+        writeIORef (rtsEnv ?actorSt) $! mergeEnv oldenv modenv
         pure ()
 
     loadModule mod = do
         let modn = strNat mod
-        getenv modn <$> readIORef vMod >>= \case
+        getenv modn <$> readIORef (rtsMod ?actorSt) >>= \case
             Nothing        -> processNewFile mod
             Just (_, v, _) -> logCached mod >> pure v
 
     processNewFile mod = do
         logStart mod
-        writeIORef vEnv Empty -- process the file in an empty environment
+        writeIORef (rtsEnv ?actorSt) Empty -- process the file in an empty environment
         when (null mod || any (not . okFileChar) mod) do
             error "bad path"
         forms <- parseMany <$> readFile (srcDir </> (mod <> ".plan"))
         traverse_ processForm forms
         logFinish mod
-        readIORef vEnv
+        readIORef (rtsEnv ?actorSt)
 
     processForm form = case readIncl form of
         Just inc -> processFile inc
         Nothing  -> do
-            env <- readIORef vEnv
             expo <- macroexpand [] form
             unless (expo == N 0) do
                 out <- thunk expo

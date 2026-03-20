@@ -17,7 +17,7 @@
           ghcEnv = pkgs.haskellPackages.ghcWithPackages (hp: with hp; [
             text primitive pretty-show containers deepseq
             optics ghc-prim mtl transformers cryptohash-sha256
-            base58-bytestring vector
+            base58-bytestring vector network
           ]);
         in {
           default = pkgs.mkShell {

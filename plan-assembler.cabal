@@ -23,6 +23,10 @@ executable plan-assembler
     , OverloadedStrings
     , ViewPatterns
     , ScopedTypeVariables
+    , TypeApplications
+    , ConstraintKinds
+    , ImplicitParams
+    , RankNTypes
 
   other-modules:
       Types
@@ -41,6 +45,7 @@ executable plan-assembler
     , filepath
     , time
     , cryptohash-sha256
+    , network
 
 executable plan-repl
   main-is:          ReplMain.hs
@@ -61,6 +66,10 @@ executable plan-repl
     , OverloadedStrings
     , ViewPatterns
     , ScopedTypeVariables
+    , TypeApplications
+    , ConstraintKinds
+    , ImplicitParams
+    , RankNTypes
 
   other-modules:
       Types
@@ -80,3 +89,4 @@ executable plan-repl
     , filepath
     , time
     , cryptohash-sha256
+    , network

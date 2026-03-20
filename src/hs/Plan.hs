@@ -5,6 +5,7 @@
 {-# LANGUAGE LambdaCase, ViewPatterns, BlockArguments #-}
 {-# LANGUAGE OverloadedStrings, DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE ImplicitParams #-}
 
 module Plan where
 
@@ -15,6 +16,7 @@ import qualified Data.Vector as V
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Base58 as Base58
 import Data.ByteString (ByteString)
+import Data.Maybe (mapMaybe)
 import Data.Vector (Vector, (!))
 import Data.String (IsString(..))
 import Control.DeepSeq (force, deepseq)
@@ -33,9 +35,174 @@ import System.FilePath ((</>))
 import Data.Time.Clock.POSIX (getPOSIXTime, utcTimeToPOSIXSeconds)
 import qualified Crypto.Hash.SHA256 as SHA256
 import qualified Data.ByteString.Char8 as BS8
+import Control.Concurrent (forkIO)
+import Control.Concurrent.Chan (Chan, newChan, readChan, writeChan)
+import qualified Data.IntMap.Strict as IntMap
+import Data.IntMap.Strict (IntMap)
+import Control.Concurrent.MVar
+import Network.Socket hiding (close)
+import Network.Socket (fdSocket, mkSocket)
+import qualified Network.Socket as NS (close)
+import qualified Network.Socket.ByteString as NSB
 
 import Types
 import Print
+
+-- ── Bst / Env ─────────────────────────────────────────────────────────────────
+
+data Bst a = Empty | Node Natural a Bool (Bst a) (Bst a)
+
+type Env = Bst Val
+
+-- ── End Bst / Env ─────────────────────────────────────────────────────────────
+
+-- ── Runtime State (Rts) ─────────────────────────────────────────────────────
+
+-- An actor's identity is its inbox Chan.
+-- Messages carry (payload, bundled actor caps for transfer).
+newtype Actor = Actor { actorChan :: Chan (Val, [Actor]) }
+
+-- Per-actor runtime state, held in the implicit parameter ?actorSt.
+data Rts = Rts
+    { rtsInbox   :: Actor
+    , rtsHandles :: IORef (IntMap Actor)   -- actor handle table (handle → inbox)
+    , rtsNextHd  :: IORef Int
+
+    , rtsEnv     :: IORef Env              -- Wisp name environment
+    , rtsMod     :: IORef (Bst Env)        -- module cache
+    }
+
+-- Constraint alias for "running inside an actor".
+type InActor = (?actorSt :: Rts)
+
+-- Bind an Rts into the implicit parameter.
+withRts :: Rts -> ((?actorSt :: Rts) => IO a) -> IO a
+withRts st action = let ?actorSt = st in action
+
+-- Create a fresh Rts and run an action inside it.
+withNewRts :: ((?actorSt :: Rts) => IO a) -> IO a
+withNewRts action = do
+    inbox <- Actor <$> newChan
+    st    <- newRts inbox
+    withRts st action
+
+-- Make a fresh Rts.  The actor's own inbox is pre-inserted as handle 0.
+newRts :: Actor -> IO Rts
+newRts inbox = do
+    hdRef   <- newIORef (IntMap.singleton 0 inbox)
+    nxtHd   <- newIORef 1       -- 0 = self
+    envRef  <- newIORef Empty
+    modRef  <- newIORef Empty
+    pure (Rts inbox hdRef nxtHd envRef modRef)
+
+-- Actor handle table helpers
+allocActor :: Rts -> Actor -> IO Int
+allocActor st a = do
+    n <- readIORef (rtsNextHd st)
+    writeIORef (rtsNextHd st) (n + 1)
+    modifyIORef' (rtsHandles st) (IntMap.insert n a)
+    pure n
+
+getActor :: Rts -> Int -> IO Actor
+getActor st n = do
+    m <- readIORef (rtsHandles st)
+    case IntMap.lookup n m of
+        Just a  -> pure a
+        Nothing -> error ("invalid actor handle: " <> show n)
+
+removeActor :: Rts -> Int -> IO ()
+removeActor st n = modifyIORef' (rtsHandles st) (IntMap.delete n)
+
+-- Helpers for building PLAN rows
+valRow :: [Val] -> Val
+valRow [] = N 0
+valRow xs = A (N 0) (V.fromList xs)
+
+rowVals :: Val -> [Val]
+rowVals (A _ xs) = V.toList xs
+rowVals _        = []
+
+loadCapsRow :: Val -> [Int]
+loadCapsRow (A _ xs) = mapMaybe loadCap (V.toList xs)
+loadCapsRow _        = []
+
+loadCap :: Val -> Maybe Int
+loadCap (N i) | i<=maxint = Just (fromIntegral i)
+loadCap _                 = Nothing
+
+-- ── Actor Ops ─────────────────────────────────────────────────────────────────
+
+opSpawn :: InActor => Val -> IO Val
+opSpawn fn = do
+    inbox   <- Actor <$> newChan
+    childSt <- newRts inbox
+    _ <- forkIO $ withRts childSt $
+           void (try @SomeException (evaluate $ force (fn % N 0)))
+    h <- allocActor ?actorSt inbox
+    pure (N $ fromIntegral h)
+
+opSend :: InActor => Int -> Val -> IO Val
+opSend h msg = do
+    inbox <- getActor ?actorSt h
+    writeChan (actorChan inbox) (msg, [])
+    pure (N 0)
+
+opSendCaps :: InActor => Int -> Val -> Val -> IO Val
+opSendCaps h msg capsRow = do
+    let st = ?actorSt
+    caps  <- mapM (getActor st) (loadCapsRow capsRow)
+    inbox <- getActor st h
+    writeChan (actorChan inbox) (msg, caps)
+    pure (N 0)
+
+opRecv :: InActor => IO Val
+opRecv = do
+    let st = ?actorSt
+    (msg, caps) <- readChan (actorChan (rtsInbox st))
+    capHs       <- mapM (allocActor st) caps
+    pure (valRow [msg, valRow (map (N . fromIntegral) capHs)])
+
+opCloseHandle :: InActor => Int -> IO Val
+opCloseHandle h = removeActor ?actorSt h >> pure (N 0)
+
+opCloseFd :: Int -> IO Val
+opCloseFd h = do
+    sock <- mkSocket (fromIntegral h)
+    NS.close sock
+    pure (N 0)
+
+-- ── Network Ops ───────────────────────────────────────────────────────────────
+
+opListen :: Natural -> IO Val
+opListen port = do
+    sock <- socket AF_INET Stream defaultProtocol
+    setSocketOption sock ReuseAddr 1
+    let addr = SockAddrInet (fromIntegral port) (tupleToHostAddress (0,0,0,0))
+    bind sock addr
+    listen sock 128
+    fd <- fdSocket sock
+    pure (N $ fromIntegral fd)
+
+opAccept :: Int -> IO Val
+opAccept h = do
+    sock     <- mkSocket (fromIntegral h)
+    (conn, _) <- accept sock
+    fd        <- fdSocket conn
+    pure (N $ fromIntegral fd)
+
+opRead :: Int -> Natural -> IO Val
+opRead h n = do
+    sock <- mkSocket (fromIntegral h)
+    bs   <- NSB.recv sock (fromIntegral n)
+    if BS.null bs then pure (N 0) else pure (N $ bytesBar bs)
+
+opWrite :: Int -> Natural -> IO Val
+opWrite h dat = do
+    sock <- mkSocket (fromIntegral h)
+    NSB.sendAll sock (natBytes dat)
+    pure (N 0)
+
+-- ── End Runtime State ─────────────────────────────────────────────────────────
 
 arity (A f xs)      = if af==0 then 0 else af - fromIntegral (length xs)
                         where af = arity f
@@ -51,13 +218,14 @@ match _ _ a _ _ (A f xs)  = a % ini % (xs!nid)
                              ini = if nid==0 then f else A f (V.take nid xs)
 match _ _ _ z m (N o)     = if o==0 then z else m % N (o-1)
 
+(%) :: InActor => Val -> Val -> Val
 (%) f x = if arity f /= 1 then clz f x else exec f [x]
 
 clz :: Val -> Val -> Val
 clz (A f xs) x = A f (V.snoc xs x)
 clz f        x = A f (V.singleton x)
 
-exec :: Val -> [Val] -> Val
+exec :: InActor => Val -> [Val] -> Val
 exec (P _ _ (N o))       e = op o (unapp (e!!0))
 exec (A f x)         e = exec f (V.toList x <> e)
 exec f@(L a m b)     e = judge a (reverse (f : e)) b
@@ -65,14 +233,14 @@ exec f@(P _ _ (L a m b)) e = judge a (reverse (f : e)) b
 exec (P _ _ A{})         _ = error "tried to run a pinned app"
 exec (P _ _ P{})         _ = error "tried to run a pinned pin"
 
-kal :: Natural -> [Val] -> Val -> Val
+kal :: InActor => Natural -> [Val] -> Val -> Val
 kal n e expr = case unapp expr of
     [N b] | b<=n -> e !! fromIntegral (n-b)
     [N 0, f, x]  -> (kal n e f % kal n e x)
     [N 0, x]     -> x
     _            -> expr
 
-judge :: Natural -> [Val] -> Val -> Val
+judge :: InActor => Natural -> [Val] -> Val -> Val
 judge args ie body = res
   where (n, e, res::Val) = go args ie body
         go i acc x = case unapp x of
@@ -127,7 +295,7 @@ writeByte n i b = (n `shiftR` top `shiftL` top)
   where off = 8 * i
         top = off + 8
 
-op :: Natural -> [Val] -> Val
+op :: InActor => Natural -> [Val] -> Val
 op 0 [N 0, !n]                = mkPin n
 op 0 [N 1, !a, !m, !b]        = L (nat a + 1) m b
 op 0 [N 2, p, l, a, z, m, !o] = match p l a z m o
@@ -280,7 +448,7 @@ planNil x = if x == N 0 then N 1 else N 0
 srcFile :: Natural -> FilePath
 srcFile s = ("src" </> natStr s)
 
-rplan :: [Val] -> IO Val
+rplan :: InActor => [Val] -> IO Val
 rplan args = do
     readIORef vMode >>= \case
         RPLAN -> pure ()
@@ -298,8 +466,21 @@ rplan args = do
             try (getModificationTime (srcFile n)) <&> \case
                 Left (e::IOException) -> N 0
                 Right mtime -> N $ fromInteger $ round $ utcTimeToPOSIXSeconds mtime
+
+        -- TODO: I guess the above should be more unixy?
+
         ["Now", _]       -> N . fromInteger . round <$> getPOSIXTime
-        r                -> error ("rplan:" <> concat (showVal <$> args))
+        ["Spawn",       fn]             -> opSpawn fn
+        ["Send",        N h, msg]       -> opSend (fromIntegral h) msg
+        ["SendCaps",    N h, msg, caps] -> opSendCaps (fromIntegral h) msg caps
+        ["Recv"]                        -> opRecv
+        ["CloseHandle", N h]            -> opCloseHandle (fromIntegral h)
+        ["CloseFd",     N h]            -> opCloseFd (fromIntegral h)
+        ["Listen",      N port]         -> opListen port
+        ["Accept",      N h]            -> opAccept (fromIntegral h)
+        ["Read",        N h, N n]       -> opRead  (fromIntegral h) n
+        ["Write",       N h, N dat]     -> opWrite (fromIntegral h) dat
+        _ -> error ("unknown actor/net op: " <> unwords (map showVal args))
 
 planTry f x = unsafePerformIO do
     try (evaluate $ force $ (%) f x) <&> \case
@@ -384,7 +565,7 @@ adt n xs = A (N n) (V.fromList xs)
 array :: [Val] -> Val
 array = adt 0
 
-apple :: [Val] -> Val
+apple :: InActor => [Val] -> Val
 apple [] = N 0
 apple [a] = a
 apple (x:y:z) = apple ((x%y):z)

@@ -23,26 +23,27 @@ module Repl
     ) where
 
 import System.IO
-import System.Exit          (exitSuccess)
-import Control.Exception    (try, evaluate, SomeException, displayException)
-import Control.DeepSeq      (force)
-import Control.Monad        (when, unless)
-import Data.IORef           (readIORef, writeIORef)
-import Data.Char            (isSpace)
-import Data.List            (intercalate)
-import Data.Maybe           (fromMaybe)
-import Numeric.Natural      (Natural)
+import System.Exit             (exitSuccess)
+import Control.Exception       (try, evaluate, SomeException, displayException)
+import Control.DeepSeq         (force)
+import Control.Monad           (when, unless)
+import Data.IORef              (readIORef, writeIORef)
+import Data.Char               (isSpace)
+import Data.List               (intercalate)
+import Data.Maybe              (fromMaybe)
+import Numeric.Natural         (Natural)
 
 import Types
 import Print
-import Plan                 (vMode, Mode(..))
+import Plan                 (vMode, Mode(..), InActor, Rts, withNewRts, rtsEnv, rtsMod)
+import Plan                 (Bst(..))
 import PlanAssembler
 
 -- ── Public API ────────────────────────────────────────────────────────────────
 
 -- | Optionally preload a .plan module before entering the REPL.
 --   e.g. @preload "src" "prelude"@
-preload :: FilePath -> String -> IO ()
+preload :: InActor => FilePath -> String -> IO ()
 preload dir mod = do
     result <- try (loadAssembly dir mod Nothing) :: IO (Either SomeException Val)
     case result of
@@ -51,7 +52,7 @@ preload dir mod = do
 
 -- | Start the interactive REPL.
 startRepl :: IO ()
-startRepl = do
+startRepl = withNewRts do
     hSetBuffering stdout NoBuffering
     hSetBuffering stdin  LineBuffering
     mapM_ putStrLn banner
@@ -71,7 +72,7 @@ banner =
 
 -- ── Main loop ─────────────────────────────────────────────────────────────────
 
-loop :: IO ()
+loop :: InActor => IO ()
 loop = readExpr >>= \case
     Nothing   -> putStrLn "\nGoodbye."
     Just ""   -> loop
@@ -130,13 +131,13 @@ trim = reverse . dropWhile isSpace . reverse . dropWhile isSpace
 
 -- ── Dispatch ─────────────────────────────────────────────────────────────────
 
-dispatch :: String -> IO ()
+dispatch :: InActor => String -> IO ()
 dispatch (':' : rest) = handleCmd (words rest)
 dispatch src          = handleExpr src
 
 -- ── REPL commands ─────────────────────────────────────────────────────────────
 
-handleCmd :: [String] -> IO ()
+handleCmd :: InActor => [String] -> IO ()
 handleCmd []                    = pure ()
 handleCmd ("quit"  : _)         = putStrLn "Goodbye." >> exitSuccess
 handleCmd ("q"     : _)         = putStrLn "Goodbye." >> exitSuccess
@@ -192,9 +193,9 @@ helpText = unlines
 
 -- ── :env ─────────────────────────────────────────────────────────────────────
 
-cmdEnv :: IO ()
+cmdEnv :: InActor => IO ()
 cmdEnv = do
-    env   <- readIORef vEnv
+    env   <- readIORef (rtsEnv ?actorSt)
     let nodes = bstWalk env
     if null nodes
         then putStrLn "(environment is empty)"
@@ -210,14 +211,14 @@ cmdEnv = do
 
 -- ── :reset ───────────────────────────────────────────────────────────────────
 
-cmdReset :: IO ()
+cmdReset :: InActor => IO ()
 cmdReset = do
-    writeIORef vEnv Empty
+    writeIORef (rtsEnv ?actorSt) Empty
     putStrLn "Environment cleared."
 
 -- ── :info ────────────────────────────────────────────────────────────────────
 
-cmdInfo :: String -> IO ()
+cmdInfo :: InActor => String -> IO ()
 cmdInfo nm = do
     let key = strNat nm
     getenvIO key >>= \case
@@ -231,7 +232,7 @@ cmdInfo nm = do
 
 -- ── :type ────────────────────────────────────────────────────────────────────
 
-cmdType :: String -> IO ()
+cmdType :: InActor => String -> IO ()
 cmdType src
     | all isSpace src = putStrLn "Usage: :type <expression>"
     | otherwise = do
@@ -264,18 +265,19 @@ planKind = \case
 --      the snapshot when preserveState unwinds)
 --   3. read the freshly-cached module env out of vMod
 --   4. merge it into the snapshot and write the result back to vEnv
-cmdLoad :: Maybe FilePath -> String -> IO ()
+cmdLoad :: InActor => Maybe FilePath -> String -> IO ()
 cmdLoad mDir mod = do
-    liveEnv <- readIORef vEnv
+    let st = ?actorSt
+    liveEnv <- readIORef (rtsEnv st)
     result  <- try (loadAssembly dir mod Nothing) :: IO (Either SomeException Val)
     case result of
         Left e  -> putStrLn $ "Load error: " <> show e
         Right _ -> do
-            modCache <- readIORef vMod
+            modCache <- readIORef (rtsMod st)
             case getenv (strNat mod) modCache of
                 Nothing -> putStrLn "Load succeeded but module not found in cache."
                 Just (_, modEnv, _) -> do
-                    writeIORef vEnv $! mergeEnv liveEnv modEnv
+                    writeIORef (rtsEnv st) $! mergeEnv liveEnv modEnv
                     let added = length (bstWalk modEnv)
                     putStrLn $ "Loaded " <> show added <> " binding(s) from "
                              <> dir <> "/" <> mod <> ".plan"
@@ -284,7 +286,7 @@ cmdLoad mDir mod = do
 
 -- ── Expression evaluation ─────────────────────────────────────────────────────
 
-handleExpr :: String -> IO ()
+handleExpr :: InActor => String -> IO ()
 handleExpr src = do
     result <- try (evalAllSrc src) :: IO (Either SomeException [Val])
     case result of
@@ -292,19 +294,19 @@ handleExpr src = do
         Right vs -> mapM_ displayVal vs
 
 -- | Evaluate all top-level forms in @src@ and return their results.
-evalAllSrc :: String -> IO [Val]
+evalAllSrc :: InActor => String -> IO [Val]
 evalAllSrc src =
     let forms = parseMany src
     in  mapM evalForm forms
 
 -- | Evaluate just the first form, for commands like :type.
-evalOneSrc :: String -> IO Val
+evalOneSrc :: InActor => String -> IO Val
 evalOneSrc src = case parseMany src of
     []    -> pure (N 0)
     (f:_) -> evalForm f
 
 -- | Expand macros, thunk, and force a single parsed form.
-evalForm :: Val -> IO Val
+evalForm :: InActor => Val -> IO Val
 evalForm form = do
     expo <- macroexpand [] form
     if expo == N 0
