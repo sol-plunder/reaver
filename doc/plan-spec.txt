@@ -1,0 +1,21 @@
+╔═══════════════════╦═════════════════════════╦══════════════════════════════╗
+║ A(f x)     = Af-1 ║ Ho1 = o#Xoo; Eo         ║ Cp____<i>     = p i          ║
+║ A{a m b}   = a    ║ Hoa = o                 ║ C_l___{a m b} = l a m b      ║
+║ A<{a m b}> = a    ║                         ║ C__a__(x e)   = a x e        ║
+║ A@         = 0    ║ I0(e x) = x             ║ C___z_0       = z            ║
+║ A<i>       = 1    ║ In(e x) = I(n-1)e       ║ C____m(o:@)   = m (o-1)      ║
+║                   ║ In_     = 0             ║                              ║
+║ N(x:@) = x        ║                         ║ Jamb = Eb; Baa0bb; {a m b}   ║
+║ N_     = 0        ║ E(o:(f x)) = Ef; Ho(Af) ║                              ║
+╠╦═╦═╦═╦═╦═╦═╦═╦═╦═╦╣ E<>        = E<>        ║ Xe(<o:@> x) = Ex; Sox        ║
+╠╬╦╬╦╬╦╬╦╬╦╬╦╬╦╬╦╬╦╬╣ Eo         = o    ╔╦╦╦╦╦╣ Xe(f x)     = Xef            ║
+╠═╩═╩═╩═╩═╩═╩═╩═╩═╩═╩═══════════════════╬═╬═╬═╣ Xe{a m b}   = Baaebb         ║
+╠═══════════════════════════════════════╬╩╩╩╩╩╝ Xe<{a m b}> = Baaebb         ║
+║ Line(1 v b) = Ev; Iie#Rnev; L(i+1)neb ║                                    ║
+║ Linex       = Rnex                    ║ S0(0 i)           = Ei; <i>        ║
+║                                       ║ S0(1 a m b)       = Ea; J(Na+1)mb  ║
+║ Rne(b:@) | b<=n = I(n-b)e             ║ S0(2 p l a z m o) = Eo; Cplazmo    ║
+║ Rne(0 f x)      = Ef; Ex; (Rnef Rnex) ║                                    ║
+║ Rne(0 x)        = Ex; x               ║ Baneb(1 _ k) = Ek; Ba(n+1)(e <>)bk ║
+║ Rnex            = x                   ║ Banebx       = Laneb               ║
+╚═══════════════════════════════════════╩════════════════════════════════════╝
