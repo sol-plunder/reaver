@@ -23,6 +23,7 @@
           default = pkgs.mkShell {
             packages = [
               ghcEnv
+              pkgs.rlwrap
               pkgs.haskellPackages.ghcid
               pkgs.haskellPackages.stylish-haskell
               pkgs.haskellPackages.cabal-install

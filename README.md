@@ -27,12 +27,12 @@ a text editor, so that you can easily see everything that's going on.
 
 ## Running
 
-Just run `x/reaver` to build everything and get a Reaver REPL.  The Nix
-flake should pull in everything for you, otherwise you will need
+Just run `rlwrap x/reaver` to build everything and get a Reaver REPL.
+The Nix flake should pull in everything for you, otherwise you will need
 `cabal-install` which should also handle everything for you.
 
-Use `rlwrap x/reaver` to get line-editing for now, eventually we will
-implement actual line-editing in the system.
+The first time that you run that, it will build reaver and import the
+standard library.  On subsequent runs, it will just resume your session.
 
 In Reaver, you can use `:*module` to reload a module and import all of
 it's bindings.  It use the last-written timestamp to determine if the
