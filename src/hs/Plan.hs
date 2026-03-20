@@ -41,12 +41,33 @@ import qualified Data.IntMap.Strict as IntMap
 import Data.IntMap.Strict (IntMap)
 import Control.Concurrent.MVar
 import Network.Socket hiding (close)
-import Network.Socket (fdSocket, mkSocket)
-import qualified Network.Socket as NS (close)
+import qualified Network.Socket.Internal as NS
+import qualified Network.Socket as NS (close, Socket)
 import qualified Network.Socket.ByteString as NSB
 
 import Types
 import Print
+
+-- ── Global socket table ───────────────────────────────────────────────────────
+{-# NOINLINE gSocketTable #-}
+gSocketTable :: MVar (IntMap Socket, Int)
+gSocketTable = unsafePerformIO $ newMVar (IntMap.empty, 0)
+
+gAllocSocket :: Socket -> IO Int
+gAllocSocket sock = modifyMVar gSocketTable $ \(m, n) ->
+    pure ((IntMap.insert n sock m, n + 1), n)
+
+gGetSocket :: Int -> IO Socket
+gGetSocket n = do
+    (m, _) <- readMVar gSocketTable
+    case IntMap.lookup n m of
+        Just s  -> pure s
+        Nothing -> error ("invalid socket fd: " <> show n)
+
+gRemoveSocket :: Int -> IO ()
+gRemoveSocket n = modifyMVar_ gSocketTable $ \(m, c) ->
+    pure (IntMap.delete n m, c)
+
 
 -- ── Bst / Env ─────────────────────────────────────────────────────────────────
 
@@ -165,13 +186,14 @@ opRecv = do
 opCloseHandle :: InActor => Int -> IO Val
 opCloseHandle h = removeActor ?actorSt h >> pure (N 0)
 
+-- ── Network Ops ───────────────────────────────────────────────────────────────
+
 opCloseFd :: Int -> IO Val
 opCloseFd h = do
-    sock <- mkSocket (fromIntegral h)
+    sock <- gGetSocket h
     NS.close sock
+    gRemoveSocket h
     pure (N 0)
-
--- ── Network Ops ───────────────────────────────────────────────────────────────
 
 opListen :: Natural -> IO Val
 opListen port = do
@@ -180,26 +202,34 @@ opListen port = do
     let addr = SockAddrInet (fromIntegral port) (tupleToHostAddress (0,0,0,0))
     bind sock addr
     listen sock 128
-    fd <- fdSocket sock
-    pure (N $ fromIntegral fd)
+    h <- gAllocSocket sock
+    pure (N $ fromIntegral h)
 
 opAccept :: Int -> IO Val
 opAccept h = do
-    sock     <- mkSocket (fromIntegral h)
-    (conn, _) <- accept sock
-    fd        <- fdSocket conn
+    listenSock <- gGetSocket h
+    (conn, _)  <- accept listenSock
+    fd         <- gAllocSocket conn
     pure (N $ fromIntegral fd)
 
 opRead :: Int -> Natural -> IO Val
 opRead h n = do
-    sock <- mkSocket (fromIntegral h)
+    print ("opread")
+    sock <- gGetSocket h
+    print ("opread", sock)
     bs   <- NSB.recv sock (fromIntegral n)
+    print ("opread", bs)
     if BS.null bs then pure (N 0) else pure (N $ bytesBar bs)
 
 opWrite :: Int -> Natural -> IO Val
 opWrite h dat = do
-    sock <- mkSocket (fromIntegral h)
+    print ("opWrite")
+    sock <- gGetSocket h
+    print ("opWrite", sock)
+    print ("opWrite", natBytes dat)
     NSB.sendAll sock (natBytes dat)
+    print ("opWrite", "done")
+    NS.close sock
     pure (N 0)
 
 -- ── End Runtime State ─────────────────────────────────────────────────────────
@@ -211,7 +241,7 @@ arity (L a _ _)     = a
 arity (N _)         = 0
 arity (P _ _ _)     = 1
 
-match p _ _ _ _ (P _ _ i)     = p % i
+match p _ _ _ _ (P _ _ i) = p % i
 match _ l _ _ _ (L a m b) = l % N a % m % b
 match _ _ a _ _ (A f xs)  = a % ini % (xs!nid)
                        where nid = V.length xs - 1

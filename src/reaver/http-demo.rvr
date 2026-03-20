@@ -1,0 +1,83 @@
+;;;; http-demo.rvr
+;;;; A minimal HTTP/1.1 server.
+;;;; Listens on port 8080, spawns a handler actor per connection.
+
+(#bind std (#module std))
+(#import std)
+
+;;; Actor / network primitives ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rplan ("Spawn"       fn))
+(rplan ("Send"        handle msg))
+(rplan ("SendCaps"    handle msg caps))
+(rplan ("Recv"        z))
+(rplan ("CloseHandle" handle))
+(rplan ("Listen"      port))
+(rplan ("Accept"      fd))
+(rplan ("Read"        fd n))
+(rplan ("Write"       fd dat))
+(rplan ("CloseFd"     fd))
+
+
+;;; String helpers ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define (strWeld a b)
+  (Add (Lsh b (Mul 8 (Bytes a))) a))
+
+
+;;; HTTP response ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define cr 13)
+(define lf 10)
+(define crlf (strWeld cr lf))
+
+(define html-body
+  "<html><body><h1>Hello from Reaver!</h1></body></html>")
+
+(define response
+  (lstrcat
+    ~[ "HTTP/1.0 200 OK" crlf
+       "Content-Type: text/html" crlf crlf
+       html-body]))
+
+
+;;; Connection handler ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Receives a single message containing the connection fd,
+;;; reads the request, writes the response, closes, exits.
+
+(define (handle-connection conn self)
+  (print ("handler: reading" conn))
+  (define input (Read conn 4096))
+  (print ("handler: read" input))
+  (Write conn response)
+  (print ("handler: wrote response"))
+  (CloseFd conn)
+  (print "handler: closed connection")
+  (print "handler: exiting"))
+
+
+;;; Listener loop ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Loops forever: accept a connection, spawn a handler, send it the fd.
+
+(define (listener-loop listen)
+  (print ("listener: accept" listen))
+  (define conn-fd (Accept listen))
+  (print ("listener: conn-fd" conn-fd))
+  (define handler (Spawn (handle-connection conn-fd)))
+  (print ("listener: handler" handler))
+  ; (CloseHandle handler)
+  ; (print "listener: closed")
+  (listener-loop listen))
+
+(define (run-http port)
+  (print ("run-http" port))
+  (define listen (Listen port))
+  (print ("run-http" listen))
+  (listener-loop listen))
+
+
+;;; Main ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(run-http 8080)
