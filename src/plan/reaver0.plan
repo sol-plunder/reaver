@@ -5,14 +5,14 @@
 @inline
 
 ;;;; Reaver0 is a simpler variant of Reaver which is implemented within
-;;;; the Wisp macro system.  Reaver itself is implemented in Reaver0.
+;;;; Assembly macros.  Reaver itself is implemented in Reaver0.
 ;;;;
 ;;;; Reaver0 supports all of the lambda-calculus features, but it uses
-;;;; the Wisp syntax and macro-system, which is stateless and does not
-;;;; support hygenic macros.
+;;;; the Assembly syntax and Assembly macros, which are stateless and
+;;;; therefore cannot support gensym or always-inline functions.
 ;;;;
-;;;; This gives us just enough expressive power in order to build Reaver
-;;;; out without too much pain.
+;;;; This gives us just enough expressive power in order to build the
+;;;; proper Reaver toolchain without too much pain.
 ;;;;
 ;;;; Single pass: resolves names, expands macros, and emits LExpr directly.
 ;;;; No intermediate keyed representation, no unique key supply, no separate
@@ -28,13 +28,6 @@
 ;;;; Env is a flat Map. bindGroup inserts locals with Flag=Local. pushGate
 ;;;; eagerly merges free names from usage env into captured env. Resolution
 ;;;; is a single Map.lookup + flag check.
-;;;;
-;;;; Code style: Wisp-compatible.
-;;;;   - No forward references.
-;;;;   - Mutual recursion broken by passing function references.
-;;;;   - Each function has one binding site (explicit case).
-;;;;   - Cases are shallow.
-;;;;   - `let` only at the very top of a function body.
 
 ;-- ============================================================================
 ;-- Read Helpers

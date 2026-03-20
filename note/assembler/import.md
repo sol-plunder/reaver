@@ -1,9 +1,9 @@
-# Balanced BST Merge for Wisp Environments
+# Balanced BST Merge for Assembly Environments
 
-When a Wisp file imports a module, the two environments must be unioned
-into a single BST. A naive insertion-based merge leaves the tree
-arbitrarily unbalanced. Instead, we rebuild a perfectly balanced tree
-from scratch in three simple linear passes.
+When a Plan Assembly file imports a module, the two environments must
+be unioned into a single BST. A naive insertion-based merge leaves the
+tree arbitrarily unbalanced. Instead, we rebuild a perfectly balanced
+tree from scratch in three simple linear passes.
 
 ## The Three Passes
 
@@ -23,7 +23,7 @@ subtree is built from `[0, n/2)`, and the right subtree from
 `(n/2, n)`. Each level of recursion halves the remaining array, so the
 resulting tree has depth `ceil(log2(n))` — perfectly balanced.
 
-## Why This Is Easy to Implement in Assembler
+## Why This Is Easy to Implement in Machine Assembly
 
 Each pass is a simple loop with no complex data structures:
 

@@ -75,21 +75,15 @@
 ;;;;
 ;;;; This compiler code will be used for two different things:
 ;;;;
-;;;; 1.  Right away within Wisp, to extend the syntax of the defun,
-;;;;     lambda, and #curl ({a -> b}) macros with additional
-;;;;     expressiveness.
+;;;; 1.  Right away within Assembler to implement reaver0.
 ;;;;
-;;;; 2.  As a foundational component of the Sire language, which is built
-;;;;     using Wisp.
+;;;; 2.  As a foundational component of the Reaver language, which
+;;;;     is the first "real" language for PLAN.
 ;;;;
 ;;;; The inlining support is multi-step, as inlining a function can
 ;;;; expose additional opportunities for inlining.  In order to inline
 ;;;; global bindings, we will need not just the PLAN value of the binding,
 ;;;; but also the expression that was used to create it.
-;;;;
-;;;; Sire always tracks this information.  In Wisp, we can simply add
-;;;; the information to the end of each binding, and replace the =defun=
-;;;; macro with a new version which includes this information.
 ;;;;
 ;;;;
 ;;;; Pipeline

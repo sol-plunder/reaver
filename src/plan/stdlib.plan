@@ -597,7 +597,7 @@ assert(Eq "Hello wo" (Trunc64 "Hello world!"))  ;  indirect
   body(Ix2 split)
   (weld [law-macro (1 self) (cons self args)] body))
 
-; TODO: just live without this until lambda.wisp
+; TODO: just live without this until lambda.plan
 
 (defmacro (#curl ws x)
   (curly-syntax "#law" ws x))

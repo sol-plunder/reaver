@@ -7,9 +7,9 @@
 @global
 @pretty
 
-;;;; read.wisp — Reaver S-Expression Parser
+;;;; read.plan — Reaver S-Expression Parser
 ;;;;
-;;;; Tokenizes, scans, locates, and parses Wisp source text into
+;;;; Tokenizes, scans, locates, and parses Reaver source text into
 ;;;; an AST of PLAN values.
 ;;;;
 ;;;; Sexp representation:

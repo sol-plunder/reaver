@@ -16,11 +16,11 @@ hsbuild () {
 }
 
 reset () {
-	cabal run wisp -- src/plan reaver main
+	cabal run plan-assembler -- src/plan reaver main
 }
 
 repl () {
-	cabal run wisp -- snap root _ # run from snapshot
+	cabal run plan-assembler -- snap root _ # run from snapshot
 }
 
 load_stdlib () {

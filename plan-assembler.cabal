@@ -1,10 +1,10 @@
 cabal-version: 2.4
-name:          wisp
+name:          plan-assembler
 version:       0.1.0.0
 license:       MIT
 license-file:  LICENSE
 
-executable wisp
+executable plan-assembler
   main-is:          Main.hs
   hs-source-dirs:   src/hs
   default-language: Haskell2010
@@ -28,7 +28,7 @@ executable wisp
       Types
     , Print
     , Plan
-    , Wisp
+    , PlanAssembler
 
   build-depends:
       base

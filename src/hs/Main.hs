@@ -1,3 +1,3 @@
 module Main where
-import qualified Wisp
-main = Wisp.main
+import qualified PlanAssembler
+main = PlanAssembler.main

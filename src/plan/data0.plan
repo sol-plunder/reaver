@@ -7,7 +7,7 @@
 ;;; Basic ADT Macros
 ;;; ================
 ;;;
-;;; This defines some basic Wisp macros for working with
+;;; This defines some basic PLAN Assembly macros for working with
 ;;; tag-discriminated unions.
 ;;;
 ;;; Since this is defined before the lambda macros, we don't have any

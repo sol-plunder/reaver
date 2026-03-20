@@ -7,7 +7,8 @@
 @global
 @read
 
-;;;; The Reaver compiler: from Wisp S-expressions to de Bruijn indexed LExpr.
+;;;; The Reaver compiler: from Reaver S-expressions to de Bruijn indexed
+;;;; LExpr.
 ;;;;
 ;;;; Single pass: resolves names, expands macros, and emits LExpr directly.
 ;;;; No intermediate keyed representation, no unique key supply, no separate
@@ -23,13 +24,6 @@
 ;;;; Resolution checks locals first, then globals.  push-gate merges
 ;;;; captured globals and locals from a syntactic closure into the
 ;;;; call-site environment.
-;;;;
-;;;; Code style: Wisp-compatible.
-;;;;   - No forward references.
-;;;;   - Mutual recursion broken by passing function references.
-;;;;   - Each function has one binding site (explicit case).
-;;;;   - Cases are shallow.
-;;;;   - `let` only at the very top of a function body.
 ;;;;
 ;;;; Locals is a BST mapping names to one of three kinds of entry:
 ;;;;

@@ -5,7 +5,7 @@
 {-# LANGUAGE LambdaCase, ViewPatterns, BlockArguments #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Wisp where
+module PlanAssembler where
 
 import qualified Data.Vector as V
 import qualified Data.List as L
@@ -351,9 +351,9 @@ main :: IO ()
 main = do
     hSetBuffering stdin LineBuffering -- NoBuffering
     getArgs >>= void . \case
-        d:m:s:as -> loadWisp d m (Just s) >>= runRepl as
-        [d,m]    -> loadWisp d m Nothing
-        _        -> error "usage: wisp module function as ..."
+        d:m:s:as -> loadAssembly d m (Just s) >>= runRepl as
+        [d,m]    -> loadAssembly d m Nothing
+        _        -> error "usage: plan-assembler srcdir module [function]"
 
 preserveState :: IO Val -> IO Val
 preserveState act = do
@@ -380,9 +380,9 @@ logStart _mod = pure () -- putStrLn ("<LOAD " <> _mod <> ">")
 logCached _mod = pure () -- putStrLn ("cached:" <> _mod)
 logFinish _mod = pure () -- putStrLn ("</LOAD " <> _mod <> ">")
 
-loadWisp :: FilePath -> String -> Maybe String -> IO Val
-loadWisp wispDir mod mFn = preserveState do
-    writeIORef vMode (if wispDir == "snap" then RPLAN else BPLAN)
+loadAssembly :: FilePath -> String -> Maybe String -> IO Val
+loadAssembly srcDir mod mFn = preserveState do
+    writeIORef vMode (if srcDir == "snap" then RPLAN else BPLAN)
     writeIORef vEnv Empty
     processFile mod
     case mFn of
@@ -410,7 +410,7 @@ loadWisp wispDir mod mFn = preserveState do
         writeIORef vEnv Empty -- process the file in an empty environment
         when (null mod || any (not . okFileChar) mod) do
             error "bad path"
-        forms <- parseMany <$> readFile (wispDir </> (mod <> ".plan"))
+        forms <- parseMany <$> readFile (srcDir </> (mod <> ".plan"))
         traverse_ processForm forms
         logFinish mod
         readIORef vEnv

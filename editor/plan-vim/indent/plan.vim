@@ -1,18 +1,18 @@
 " Vim indent file
-" Language: Wisp (surface syntax for PLAN)
+" Language: plan (PLAN Assembly)
 
 if exists("b:did_indent")
   finish
 endif
 let b:did_indent = 1
 
-setlocal indentexpr=WispIndent()
+setlocal indentexpr=PlanIndent()
 setlocal indentkeys=0),0],0},o,O
 setlocal autoindent
 setlocal lisp
 setlocal lispwords==,:=,LAW,EVAL,PIN,#juxt,@
 
-function! WispIndent()
+function! PlanIndent()
   let lnum = prevnonblank(v:lnum - 1)
   if lnum == 0
     return 0

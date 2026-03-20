@@ -16,4 +16,4 @@
   (Trace ("main" Print args)
     (foldl main-step 0 args)))
 
-"loaded wplan-test.wisp"
+"loaded wplan-test.plan"

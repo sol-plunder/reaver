@@ -2,6 +2,6 @@ set -ex
 
 rm -f src/plan/all.plan
 (cd src/plan; ls | sed 's/.plan$//; s/^/@/') | sponge src/plan/all.plan
-cabal build wisp
-time cabal run wisp -- src/plan all
+cabal build plan-assembler
+time cabal run plan-assembler -- src/plan all
 rm -f src/plan/all.plan

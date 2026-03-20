@@ -1,5 +1,5 @@
 " Vim ftplugin file
-" Language: Wisp (surface syntax for PLAN)
+" Language: plan (PLAN Assembly)
 
 if exists("b:did_ftplugin")
   finish
