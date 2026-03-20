@@ -179,7 +179,7 @@ assert(1)
 
 ; testing
 
-:*scratch
+:*test-scratch
 zero
 
 

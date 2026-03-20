@@ -25,10 +25,9 @@ repl () {
 
 load_stdlib () {
     repl <<EOF
-(#bind stdlib (#module stdlib))
-(#import stdlib)
-:todo
-(#import todo)
+(#bind std (#module std))
+(#import std)
+:*app-todo
 EOF
 }
 

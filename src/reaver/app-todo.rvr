@@ -2,8 +2,8 @@
 ;;;; SPDX-License-Identifier: MIT
 ;;;; See LICENSE for full terms.
 
-(#bind stdlib (#module stdlib))
-(#import stdlib)
+(#bind std (#module std))
+(#import std)
 
 (define todo 0)
 (define todo (todo ("TODO" "More compact printer")))
