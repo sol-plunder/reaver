@@ -41,3 +41,42 @@ executable plan-assembler
     , filepath
     , time
     , cryptohash-sha256
+
+executable plan-repl
+  main-is:          ReplMain.hs
+  hs-source-dirs:   src/hs
+  default-language: Haskell2010
+  ghc-options:      -O2
+
+  default-extensions:
+      BangPatterns
+    , BlockArguments
+    , DeriveAnyClass
+    , DeriveFoldable
+    , DeriveFunctor
+    , DeriveGeneric
+    , DeriveTraversable
+    , LambdaCase
+    , MagicHash
+    , OverloadedStrings
+    , ViewPatterns
+    , ScopedTypeVariables
+
+  other-modules:
+      Types
+    , Print
+    , Plan
+    , PlanAssembler
+    , Repl
+
+  build-depends:
+      base
+    , vector
+    , bytestring
+    , base58-bytestring
+    , containers
+    , deepseq
+    , directory
+    , filepath
+    , time
+    , cryptohash-sha256
