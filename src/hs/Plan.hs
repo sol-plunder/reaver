@@ -473,7 +473,7 @@ rplan args = do
         ["Spawn",       fn]             -> opSpawn fn
         ["Send",        N h, msg]       -> opSend (fromIntegral h) msg
         ["SendCaps",    N h, msg, caps] -> opSendCaps (fromIntegral h) msg caps
-        ["Recv"]                        -> opRecv
+        ["Recv", N 0]                   -> opRecv
         ["CloseHandle", N h]            -> opCloseHandle (fromIntegral h)
         ["CloseFd",     N h]            -> opCloseFd (fromIntegral h)
         ["Listen",      N port]         -> opListen port

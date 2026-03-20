@@ -1,0 +1,80 @@
+;;;; actor-demo.rvr
+;;;; A basic demonstration of the actor system.
+
+(#bind std (#module std))
+(#import std)
+
+;;; Actor primitives (rplan ops not yet in bplan.rvr) ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(rplan ("Spawn"       fn))
+(rplan ("Send"        handle msg))
+(rplan ("SendCaps"    handle msg caps))
+(rplan ("Recv"        z))
+(rplan ("CloseHandle" handle))
+(rplan ("Listen"      port))
+(rplan ("Accept"      fd))
+(rplan ("Read"        fd n))
+(rplan ("Write"       fd dat))
+(rplan ("CloseFd"     fd))
+
+
+;;; A simple echo actor ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Receives messages and sends them straight back to the sender.
+;;; The message format is [reply-handle payload].
+
+(define (echo-loop self)
+  (define mc (Recv 0))
+  (define msg (Ix0 mc))
+  (define caps (Ix1 mc))
+  (define reply-handle (Ix0 caps))
+  (Send reply-handle msg)
+  (echo-loop self))
+
+(define echo-actor
+  (Spawn echo-loop))
+
+;;; Ping the echo actor and print the reply ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(define self-handle 0)   ; handle 0 is always the actor's own inbox
+
+(SendCaps echo-actor ["hello from main"] [self-handle])
+
+(let1 reply-caps (Recv 0)
+  (print ("echo replied:" (Ix0 reply-caps))))
+
+
+;;; A demo actor ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; Holds an integer state.  Messages are either:
+;;;   ["inc"]          increment and continue
+;;;   ["get" reply-h]  send current count to reply-h and continue
+
+(define demo
+  (define (loop n self)
+    (define msg-caps (Recv 0))
+    (define msg  (Ix0 msg-caps))
+    (define caps (Ix1 msg-caps))
+    (print [msg caps])
+    (cond
+      ((Equal ["inc"] msg) (loop (Inc n) self))
+      ((Equal ["get"] msg) (define reply-h (Ix0 caps))
+                           (Send reply-h n)
+                           (loop n self))
+      (else                (print ("demo: unknown message" msg))
+                           (loop n self))))
+  (Spawn (loop 0)))
+
+(Send demo ["inc"])
+(Send demo ["inc"])
+(Send demo ["inc"])
+
+(SendCaps demo ["get"] [self-handle])
+
+(let1 reply (Ix0 (Recv 0))
+  (print ("demo value:" reply)))   ; should print 3
+
+; TODO: files should be loaded in a context that does not include RPLAN.
+
+("demo-actor-handle" demo)
+(CloseHandle demo)
