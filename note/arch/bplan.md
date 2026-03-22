@@ -49,3 +49,26 @@ Both are just instances of the same evaluator with different handler sets. This 
 - The runtime shrinks to something genuinely minimal.
 - New platforms become cheap to support — provide the syscall surface and a codegen backend, and everything else is inherited.
 - The formal and implementation stories are both clean, because they were never forced to compromise each other.
+
+
+## Purity and Effects
+
+PLAN itself is pure: it is axiomatic, deterministic, and has no side effects. BPLAN is likewise pure — jets are simply fast native implementations of pure functions, not a source of impurity. Impurity only enters with platform-specific extensions like XPLAN and JPLAN, where the injected handlers perform real effects (Linux syscalls, browser APIs). The purity boundary runs along the handler set, not along any other architectural line.
+
+## Portability
+
+PLAN code is inherently portable because it is pure, axiomatic, and deterministic. It carries no platform dependencies by definition.
+
+XPLAN and JPLAN are non-portable extensions — they are thin wrappers over their host platform's native ABI and do not pretend to be anything else.
+
+The mechanism for portable effectful code is virtualization: you define a custom effectful ABI (e.g. RPLAN, a PLAN ABI for REPL demos) in terms of PLAN virtualization, then implement that ABI's driver on each target platform (XPLAN, JPLAN, etc.). The program logic is written against the abstract ABI and is therefore portable; only the driver is platform-specific.
+
+## Two Approaches to Effectful Code
+
+There are two ways to structure effectful code in this system, with different tradeoffs:
+
+**Virtualization.** The program runs inside a PLAN interpreter with injected handlers that perform effects on its behalf. This is the faster approach, but execution state lives in the call stack and cannot be serialized.
+
+**Explicit monadic interface.** Effectful code returns a request value and a continuation function rather than performing effects directly. The caller performs the effect and then invokes the continuation. Because the continuation is a first-class function value, the entire program state can be saved to disk and resumed later. This approach is slower due to the added indirection, but enables persistence and makes effectful program logic portable and deterministic — it just requires a hardware-specific driver that implements the right interface.
+
+The choice between them is a tradeoff: virtualization for performance, explicit monads for persistence and inspectability.
