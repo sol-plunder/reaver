@@ -1,4 +1,4 @@
-# BPLAN Architecture
+# PLAN, BPLAN, XPLAN, and RPLAN
 
 ## Background
 
