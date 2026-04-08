@@ -1,6 +1,6 @@
 this is an LLM generated sketch based on notes, needs review and may contain mistakes.
 
-# Plan Binary Serialization Format v1
+# Silo: An Efficient Serialization System for PLAN
 
 ## Overview
 
