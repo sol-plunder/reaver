@@ -1,3 +1,5 @@
+this is an LLM generated sketch based on notes, needs review and may contain mistakes.
+
 # Plan Binary Serialization Format v1
 
 ## Overview
@@ -6,15 +8,14 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 
 **Goals:**
 - Fast single-pass encode and decode  
-- Streaming-friendly  
-- Hash-friendly  
+- Streaming-friendly
 - Compression-friendly  
 - No hot-path varints  
-- Optional explicit references via PIN  
+- PIN references
 
 A serialized value consists of:
 
-    [optional reference table header]
+    [pins table]
     [root node]
 
 ---
@@ -142,9 +143,11 @@ Optional header:
 
     [ref_count][ref0][ref1]...[refN][root node]
 
-- ref_count encoding is implementation-defined
-- refs are fixed-width (e.g. 32-byte hashes)
-- PIN indexes refer into this table
+- ref_count is little endian, u64
+- refs are all 256bits (SHA26)
+- PIN indexes refer into this table.
+- pin refs must not be duplicated.
+- pin refs must be in traversal order.
 
 ---
 
