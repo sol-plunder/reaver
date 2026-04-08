@@ -28,3 +28,16 @@ And I think we should use sha256 for pin hashing.  It is a lot less code than BL
 Probably this should actually be how pinhash is implemented: sha256 + this format.
 
 In particular, serialization should be made to support streaming into a buffer and then that should be combined with an sha256 hash function to support hashing without any allocations.
+
+----
+
+Compared to Blake3 in tree mode;
+
+For something that needs to be jetted, you need the simplest, most stable possible impl, not the fastest.
+Tree mode doesn't help much for smallish things, which pins should always be.
+
+Mostly will be hashing small things via streaming, not hashing big materialized things in parallel.
+
+We choose seed+blake3 for our existing version, but this is essentially unjettable.  It is way too much code to be able to freeze.
+
+Looking at sha256 more carefully, it is clear that we made a mistake here. sha256+silo is plausibly simple and clean enough to be a freezable jet, which would make this whole problem space solvable.
