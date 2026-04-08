@@ -12,3 +12,19 @@ Current best guess at an approach is to just jet it, but have the jet impl be wr
 - Register this plan fn with the runtime as the jet impl.
 - Separate formal jet imp in PLAN.
 - runtime system always hashes before moving data into an immutable heaps (shared heap or persisted heap).
+
+----
+
+https://github.com/sol-plunder/reaver/blob/master/note%2Fsketch%2Fserialize.md
+
+^ I think something like this format should be used for external storage and for hashing.
+
+And I think we should use sha256 for pin hashing.  It is a lot less code than BLAKE, simpler, and has hardware support.
+
+- https://github.com/ml3m/SHA256-ASM-X86-64
+
+- https://www.nayuki.io/res/fast-sha2-hashes-in-x86-assembly/sha256-x8664.S
+
+Probably this should actually be how pinhash is implemented: sha256 + this format.
+
+In particular, serialization should be made to support streaming into a buffer and then that should be combined with an sha256 hash function to support hashing without any allocations.
