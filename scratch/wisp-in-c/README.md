@@ -41,6 +41,18 @@ should back out of this low level style and switch things back into a more idiom
 
 This older version of plan-asm allowed macros to update the environment, which meant that the environment could contain thunks and malformed nodes.  The current version no longer supports this, which means that environments are always guarenteed to be well formed and normalized, which should significantly simplify all of the code that has to do with environments.
 
+#### User macro return value
+
+User macros are still applied as `(mac env form)`, but the result is now the
+expanded form directly, not a `(0 newEnv newForm)` pair.  Remove the
+`*env = result[0]` and `out = result[1]` unpacking in `expand1_user`.
+
+The env value itself is still just the runtime BST — the Haskell happens to
+serialise it through its `bst` function into a slightly different shape
+(tag = key, 4 fields, `macroBit` as an interned `macro`/`value` symbol)
+because it stores the env in a Haskell ADT, but the C port should keep
+passing the raw GC-tracked BST directly.
+
 ### 2.1 Split `bind` into `#bind` and `#macro`
 
 **Current (`wisp.c`)**: A single `bind` primitive takes four arguments —
@@ -56,6 +68,11 @@ at expansion time to determine whether the binding is a macro.
 - Add `expand1_macro` mirroring `expand1_bind` but hard-coding `isMacro = 1`.
 - Remove the runtime evaluation of the `isMacro` argument from `expand1_bind`.
 - Update `getmacro` / `macroexpand` dispatch to recognise both symbols.
+- Change the expansion result: both `expand1_bind` and `expand1_macro` should
+  return `(1 nmNat)` (the bound name as a quoted constant) rather than nil.
+  Top-level loading will therefore trace each binding's name; the existing
+  `if (!show) goto ret;` suppression in `wisp_input` no longer applies to
+  these forms.
 
 ### 2.2 Change the `law` form to take an explicit tag argument
 
@@ -91,6 +108,23 @@ tag is an explicit first argument that is independently evaluated.
   triple rather than index 2 of a let triple (structurally the same, but
   the head symbol differs).
 - Remove `N_LET` from the symbol table if it has no other uses.
+
+### 2.4 Primitive naming convention
+
+**Current (`wisp.c`)**: Primitive macro names are bare lowercase symbols
+(`pin`, `law`, `bind`, `let`), and the parser-generated heads for nested
+forms are bare uppercase symbols (`JUXT`, `BRAK`, `CURL`).
+
+**Target (`PlanAssembler.hs`)**: All special-form names use a lowercase `#`
+prefix: `#pin`, `#law`, `#bind`, `#macro`, `#app`, `#export`, `#juxt`,
+`#brak`, `#curl`.  Pure rename — no representation change.
+
+**Changes required**:
+- Rename `N_PIN`, `N_LAW`, `N_BIND` to `#pin`, `#law`, `#bind`.
+- Rename `JUXT`, `BRAK`, `CURL` to `#juxt`, `#brak`, `#curl`.
+- Add new constants for `#macro`, `#app`, `#export` (per §2.1, §2.6, §2.7).
+- Remove `N_LET` (no longer used; replaced by `#juxt` per §2.3).
+- Update all comparison sites in `macroexpand`, `parseBind`, and the parser.
 
 ### 2.5 Add the `#juxt "#" expr` escape inside law bodies
 
@@ -160,6 +194,9 @@ cache hit and does not re-process the file.
 - At the start of processing each file, snapshot and clear `rt->env`.
 - After processing, the resulting `rt->env` is the module's export set.
 - Restore the caller's environment and merge in the module's set.
+- Change the source file extension from `.wisp` to `.plan` and read from a
+  caller-supplied source directory (replacing the hardcoded `"wisp"` opened
+  in `run_wisp`).  The entry-point side of this is in §2.9.
 
 #### 2.8b Module cache
 - Add a module cache to `WispRt` — a BST (or hash table) mapping module-name
@@ -173,6 +210,10 @@ cache hit and does not re-process the file.
 - Port the Haskell strategy: flatten both BSTs to sorted lists, merge with a
   linear-time merge (new wins on ties), rebuild a balanced BST from the merged
   sorted array.
+- Carry the per-entry macro flag through the pipeline: the flatten step
+  produces `(key, val, isMacro)` triples and the rebuild preserves the flag
+  on whichever side won.  Otherwise re-exported macros lose their macro-ness
+  across `@include`.
 
 ### 2.9 Top-level evaluation and execution modes
 
@@ -198,7 +239,17 @@ arguments as a string array.
   mode, returns the resulting environment or a named value from it.
 - Add `wisp_run(rt, fn, args, nargs)` — saves and clears the environment,
   switches to `MODE_RPLAN`, calls `fn` with `args`, restores the environment.
-  Corresponds to `preserveState` + `runReplFn` in the Haskell.
+  Corresponds to `preserveState` + `runReplFn` in the Haskell.  Note that
+  `args` is passed to `fn` as a single Plan value: a `(0 str1 str2 ...)`
+  array of string nats.
+- Plumb command-line arguments through `main`: `argv` is
+  `srcDir module [fn args...]`; with two args, just load; with three or
+  more, load then call `fn` with the remaining args packed into a Plan
+  string array.
+- Decide what to do with the Haskell's magic `"snap"` source directory,
+  which `loadAssembly` uses as a sentinel to start in `RPLAN` mode rather
+  than `BPLAN`.  The port should either replicate this string check or
+  replace it with an explicit mode argument.
 
 ### Summary of Language Changes
 
@@ -207,7 +258,9 @@ arguments as a string array.
 | Macro binding | `(bind nm isMacro val)` | `(#bind nm val)` / `(#macro nm val)` |
 | Law tag | Implicit from `sig[0]` | Explicit: `(#law tag sig ...)` |
 | Law bind syntax | `(let nm val)` | `nm(val)` → `(#juxt nm val)` |
-| Form encoding | Packed integers (`JUXT`, `BRAK`, `CURL`) | Interned strings (`#juxt`, `#brak`, `#curl`) |
+| Special-form naming | `pin`, `law`, `bind`, `JUXT`, `BRAK`, `CURL` | `#pin`, `#law`, `#bind`, `#juxt`, `#brak`, `#curl` (+ new `#macro`, `#app`, `#export`) |
+| `#bind` / `#macro` result | (`bind` expands to `0`, suppressed) | `(1 nmNat)` — name is traced at top level |
+| Module file layout | `.wisp` in hardcoded `wisp/` dir | `.plan` in caller-supplied source dir |
 | Compile-time eval | Not supported | `#(expr)` → `(#juxt "#" expr)` in law body |
 | Compile-time apply | Not supported | `(#app f a...)` |
 | Module export | Not supported | `(#export sym...)` |
