@@ -31,6 +31,16 @@ should back out of this low level style and switch things back into a more idiom
 
 ## Wisp -> Plan Assembley
 
+### Random Notes
+
+#### Thunks in Environments
+
+> Because the environment can technically contain thunks (macros
+> can put anything there), getenv needs to be careful to keep it's
+> live values on the stack.
+
+This older version of plan-asm allowed macros to update the environment, which meant that the environment could contain thunks and malformed nodes.  The current version no longer supports this, which means that environments are always guarenteed to be well formed and normalized, which should significantly simplify all of the code that has to do with environments.
+
 ### 2.1 Split `bind` into `#bind` and `#macro`
 
 **Current (`wisp.c`)**: A single `bind` primitive takes four arguments —
