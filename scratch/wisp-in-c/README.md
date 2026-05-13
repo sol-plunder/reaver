@@ -92,24 +92,6 @@ tag is an explicit first argument that is independently evaluated.
   the head symbol differs).
 - Remove `N_LET` from the symbol table if it has no other uses.
 
-### 2.4 Unify form encoding: use string symbols for `#juxt`, `#brak`, `#curl`
-
-**Current (`wisp.c`)**: The special parser forms are encoded as packed-integer
-constants (`JUXT = sym4('J','U','X','T')`, `BRAK`, `CURL`). These are
-produced directly by the parser and compared against in `macroexpand`.
-
-**Target (`PlanAssembler.hs`)**: The same forms are ordinary interned string
-symbols — `"#juxt"`, `"#brak"`, `"#curl"` — indistinguishable in representation
-from any other symbol. The `#` prefix is a naming convention, not a structural
-marker.
-
-**Changes required**:
-- Replace the `sym4`/`sym3` packed-integer constants with interned nat values
-  for the corresponding strings (`#juxt`, `#brak`, `#curl`).
-- Update all comparison sites in `macroexpand`, `parseBind`, and `compileExpr`
-  to use the interned values.
-- Remove the `symN` macros once no longer used.
-
 ### 2.5 Add the `#juxt "#" expr` escape inside law bodies
 
 **Current (`wisp.c`)**: No equivalent. Inside a law body, all sub-expressions
