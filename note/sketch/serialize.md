@@ -220,3 +220,21 @@ With all branches written out:
     00000 sss    PIN (s<7)
     00000 111    PIN id
 ```
+
+Example:
+
+```
+(map add, 1[127 127 127])
+
+10000010 SML(2)
+$map
+$add
+01010000 APP(sz=2, tag=0)
+01001111   APP(sz=1)
+00000000     PIN(0)
+00000001     PIN(1)
+01011001  APP(sz=3 tag=1)
+11111111    SML(127)
+11111111    SML(127)
+11111111    SML(127)
+```
