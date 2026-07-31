@@ -41,8 +41,8 @@ Every node begins with one opcode byte:
     10 vvvvvv    SMOL
     110 sssss    MEDIUM
     1110 zzzz    BIG
-    1111lll      LAW
-    1111 sss     PIN
+    11110 lll      LAW
+    11111 sss     PIN
 
 **Field meanings:**
 
