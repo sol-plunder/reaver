@@ -20,7 +20,13 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 - Dispatch byte branches on initial 0s instead of fixed size enum.
 - This allows more metadata bits to be crammed in to cases that need it more (small numbers and adts)
 - varint cases use the same encoding as normal data to keep logic small.
-- edge list up-front is good for compression.
+- edge list up-front is good for compression
+
+## Compared to Seed
+
+- no deduplication (much faster encoding).
+- byte aligned (faster, better compression, less confusing).
+- nats are encoded inline, instead of allocated up front. (faster encoding)
 
 ## Overall Format
 
@@ -40,7 +46,7 @@ Format:
 
 ## varint
 
-same as a normal node, but rejecting things besides numbers.
+Places where a varint is needed (e.g. large pin reference) are just encoded like a normal plan value, but you reject the result if it is an app/etc.  this avoids separate logic for varints.
 
 ## Node Layout
 
