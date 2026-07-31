@@ -29,7 +29,7 @@ Format:
 - pin refs must not be duplicated.
 - pin refs must be in traversal order
 
-## variant
+## varint
 
 same as a normal node, but rejecting things besides numbers.
 
@@ -41,7 +41,7 @@ Every node begins with one opcode byte:
     10 vvvvvv    SMOL
     110 sssss    MEDIUM
     1110 zzzz    BIG
-    1111000      LAW
+    1111lll      LAW
     1111 sss     PIN
 
 **Field meanings:**
@@ -51,7 +51,8 @@ Every node begins with one opcode byte:
 - vvvvvv — small natural value  
 - sssss — payload byte width  
 - zzzz — byte width of the length field  
-- sss — PIN index width minus 1  
+- sss — PIN index width minus 1
+- lll - law arity
 
 ---
 
