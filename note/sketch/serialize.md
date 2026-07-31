@@ -50,12 +50,25 @@ Opcode:
 
     0 aaaa ttt
 
-- arity = aaaa (0–15)
+- size = aaaa (0–15)
 - tag = ttt (0–7)
 
 Encoding:
 
     [opcode][child0][child1]...[child(arity-1)]
+
+If size=0, that means that the Arity is too big and is encoded directly as a number.
+
+    [opcode][size][child0][child1]...[child(arity-1)]
+
+similarly, if tag=7 then that means that is explicit 
+
+    [opcode][tag][child0][child1]...[child(arity-1)]
+
+so, is Arity=0 and tag=7, then both are explicit.
+
+    [opcode][size][tag][child0][child1]...[child(arity-1)]
+
 
 ---
 
@@ -139,11 +152,16 @@ Encoding:
 
 ## Reference Table
 
-Optional header:
+Format:
 
-    [ref_count][ref0][ref1]...[refN][root node]
+    [ref_count]
+    [ref0]
+    [ref1]
+    ...
+    [refN]
+    [root node]
 
-- ref_count is little endian, u64
+- ref_count is a number, encoded like any other.
 - refs are all 256bits (SHA26)
 - PIN indexes refer into this table.
 - pin refs must not be duplicated.
