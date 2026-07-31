@@ -32,7 +32,7 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 
 Format:
 
-    [num_refs:variant]
+    [num_refs:varint]
     [ref0]
     [ref1]
     ...
