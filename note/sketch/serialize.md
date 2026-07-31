@@ -203,7 +203,11 @@ Encoding (p=7):
     0001 zzzz    BIG
     00001 lll    LAW
     00000 sss    PIN
+```
 
+with all branches written out:
+
+```
     1 vvvvvvv    SML
     01 aaattt    APP kids..
     01 000ttt    APP sz kids..
