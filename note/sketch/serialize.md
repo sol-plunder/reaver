@@ -205,18 +205,18 @@ Encoding (p=7):
     00000 sss    PIN
 ```
 
-with all branches written out:
+With all branches written out:
 
 ```
     1 vvvvvvv    SML
-    01 aaattt    APP kids..
-    01 000ttt    APP sz kids..
-    01 aaa000    APP tag kids...
+    01 aaattt    APP kids.. (a>0, t<7)
+    01 000ttt    APP sz kids.. (t<7)
+    01 aaa111    APP tag kids... (a>0)
     01 000111    APP sz tag kids...
     001 sssss    MED bytes
     0001 zzzz    BIG byte-size bytes
-    00001 lll    LAW metadata body
-    00001 000    LAW Arity metadata body
-    00000 sss    PIN
-    00000 111    PIN sz
+    00001 lll    LAW metadata body (l>0)
+    00001 000    LAW arity metadata body
+    00000 sss    PIN (s<7)
+    00000 111    PIN id
 ```
