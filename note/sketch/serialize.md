@@ -8,12 +8,12 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 
 **Goals:**
 - Fast single-pass encode and decode  
-- Streaming-friendly
+- Streaming-friendly (hash without materializing the entire buffer)
 - Compression-friendly  
-- avoid varints where possible
-- PIN references
+- space vision
+- encodes a single DAG node.
 
-# Design Notes
+## Design Notes
 
 - Similar in design to MessagePack.
 - PLAN is simpler so more data fits in the dispatch byte.
