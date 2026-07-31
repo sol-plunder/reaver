@@ -140,7 +140,7 @@ Encoding:
 
 Opcode:
 
-    1111aaa
+    11110aaa
 
 Encoding (Arity = 0):
 
@@ -156,7 +156,7 @@ Encoding (otherwise):
 
 Opcode:
 
-    1111 ppp
+    11111ppp
 
 Encoding (p < 7):
 
