@@ -10,8 +10,8 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 - Fast single-pass encode and decode  
 - Streaming-friendly (hash without materializing the entire buffer)
 - Compression-friendly  
-- space vision
-- encodes a single DAG node.
+- Space efficient.
+- Encodes a single DAG node.
 
 ## Design Notes
 
