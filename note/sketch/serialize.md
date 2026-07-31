@@ -13,6 +13,15 @@ This format is a compact, prefix-coded, byte-aligned binary encoding for PLAN.  
 - avoid varints where possible
 - PIN references
 
+# Design Notes
+
+- Similar in design to MessagePack.
+- PLAN is simpler so more data fits in the dispatch byte.
+- Dispatch byte branches on initial 0s instead of fixed size enum.
+- This allows more metadata bits to be crammed in to cases that need it more (small numbers and adts)
+- varint cases use the same encoding as normal data to keep logic small.
+- edge list up-front is good for compression.
+
 ## Overall Format
 
 Format:
@@ -174,3 +183,30 @@ Encoding (p=7):
 
 - Always use the smallest possible encoding for each node.
 - Pin refs should appear in the table in traversal order, without duplicates.
+
+# Alternate
+
+- more direct numbers in exchange for explicit size byte for arrays w/ size>7
+
+- swap tag encodings to make lzcnt work directly.
+
+```
+    1 vvvvvvv    SML (0-127)
+    01 aaattt    APP
+    001 sssss    MED (1-16 bytes)
+    0001 zzzz    BIG
+    00001 lll    LAW
+    00000 sss    PIN
+
+    1 vvvvvvv    SML
+    01 aaattt    APP kids..
+    01 000ttt    APP sz kids..
+    01 aaa000    APP tag kids...
+    01 000111    APP sz tag kids...
+    001 sssss    MED bytes
+    0001 zzzz    BIG byte-size bytes
+    00001 lll    LAW metadata body
+    00001 000    LAW Arity metadata body
+    00000 sss    PIN
+    00000 111    PIN sz
+```
